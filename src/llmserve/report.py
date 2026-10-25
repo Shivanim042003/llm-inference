@@ -209,6 +209,11 @@ def microbench_section(findings):
     plt.savefig(FIGS / "microbench.png", dpi=150)
     plt.close()
     d = dec.dropna(subset=["step_ms"])
+    if "step_ms_worst" in d and len(d) > 1:
+        spread = (d["step_ms_worst"] / d["step_ms"]).max()
+        if spread > 1.5:
+            findings.append(f"Microbenchmark timing was noisy on this host (worst/best repeat up to {spread:.1f}x); "
+                            f"step times above are best-of-5 medians, so treat them as lower bounds on cost.")
     if len(d) > 1:
         b0 = d.iloc[0]
         flat = d[d["step_ms"] <= 1.5 * b0["step_ms"]]

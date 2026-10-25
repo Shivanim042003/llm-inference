@@ -74,8 +74,10 @@ def decode_curve(model, device, vocab, batches, ctx=256, steps=8):
                 model(input_ids=nxt, attention_mask=mask, position_ids=pos,
                       past_key_values=cache, use_cache=True)
 
-            sec = _timed(step, device, warmup=2, iters=steps)
-            rows.append({"batch": b, "ctx": ctx, "step_ms": sec * 1e3, "tok_per_s": b / sec})
+            secs = [_timed(step, device, warmup=3, iters=steps) for _ in range(5)]   # best of 5 medians
+            sec = min(secs)
+            rows.append({"batch": b, "ctx": ctx, "step_ms": sec * 1e3, "tok_per_s": b / sec,
+                         "step_ms_worst": max(secs) * 1e3})
         except torch.cuda.OutOfMemoryError:
             torch.cuda.empty_cache()
             rows.append({"batch": b, "ctx": ctx, "step_ms": float("nan"), "tok_per_s": float("nan")})
