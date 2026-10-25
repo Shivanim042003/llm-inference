@@ -57,7 +57,32 @@ flowchart LR
 ## Results
 
 <!-- RESULTS:START -->
-*Run the experiments to populate this section (`make t4`, or the Colab notebook).*
+**Setup:** model `Qwen/Qwen2.5-0.5B-Instruct`, float16, hardware: Tesla T4, torch 2.11.0+cu130, transformers 5.20.2, run date 2026-10-25 15:40:22 UTC, commit `86d73d4`.
+
+### Key findings (auto-generated from the data)
+
+- Sequential serving never met the SLO at any tested rate, while continuous-16 sustained 4 req/s, continuous-32 sustained 4 req/s, vllm sustained 12 req/s.
+- At 8 req/s, continuous batching cuts p95 TTFT 1.9x versus static batching of the same size (43.14s vs 22.48s).
+- SLO capacity: continuous-16 4 req/s vs static-16 0 req/s.
+- Against vLLM on the same GPU, our best engine (continuous-16) reaches 33% of vLLM's SLO capacity (4 vs 12 req/s).
+- Closed-loop peak: **continuous-16** 322 tok/s = 10.8x sequential (30 tok/s).
+- Closed-loop peak: **static-16** 170 tok/s = 5.7x sequential (30 tok/s).
+- Closed-loop peak: **vllm** 1437 tok/s = 48.0x sequential (30 tok/s).
+- Decode step time is nearly flat in batch size: within 1.5x of batch 1 (35.33 ms) up to batch **32**, where decode tokens/s is 32.8x batch 1. This is why batching raises throughput.
+- At batch 64 a decode step takes 57.64 ms, 6.4% of the assumed 320 GB/s peak bandwidth: well below the memory roofline, so the step is not bandwidth-bound; kernel-launch / Python overhead is the likely limiter (check profile_decode.txt).
+- float16/int8: 0.28x throughput vs fp32, perplexity 2.486 vs 2.489, 59% greedy-token agreement.
+- float16/nf4: 0.88x throughput vs fp32, perplexity 2.616 vs 2.489, 23% greedy-token agreement.
+- float16/none: 1.18x throughput vs fp32, perplexity 2.488 vs 2.489, 98% greedy-token agreement.
+
+![scheduler_open_loop](reports/figures/scheduler_open_loop.png)
+
+![concurrency_closed_loop](reports/figures/concurrency_closed_loop.png)
+
+![microbench](reports/figures/microbench.png)
+
+![precision](reports/figures/precision.png)
+
+Full tables and methodology: [reports/RESULTS.md](reports/RESULTS.md).
 <!-- RESULTS:END -->
 
 ## Reproduce

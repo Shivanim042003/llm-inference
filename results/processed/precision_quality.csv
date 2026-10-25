@@ -1,0 +1,5 @@
+dtype,quant,perplexity,eval_tokens,eval_text,greedy_token_agreement,greedy_exact_match,param_mb
+float32,none,2.488952407228654,4991,built-in fallback paragraph,1.0,1.0,1884.58544921875
+float16,none,2.488474995062618,4991,built-in fallback paragraph,0.9770833333333333,0.9166666666666666,942.292724609375
+float16,int8,2.4859511775898144,4991,built-in fallback paragraph,0.5916666666666667,0.4166666666666667,601.042724609375
+float16,nf4,2.615786441897465,4991,built-in fallback paragraph,0.23253676470588236,0.0,430.417724609375
