@@ -1,0 +1,12 @@
+# torch is expected to be preinstalled (Colab) or installed separately for your platform
+transformers>=4.46
+accelerate
+fastapi
+uvicorn
+httpx
+pandas
+matplotlib
+datasets
+pytest
+# optional: int8 / nf4 experiments (GPU only)
+bitsandbytes
