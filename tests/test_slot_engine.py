@@ -145,5 +145,6 @@ def test_cuda_graphs_match_eager_slot_engine_and_reference():
     assert e1.cuda_graphs and e1.graph_error is None and len(e1.graphs) > 0, e1.graph_error
     agree = sum(a == b for a, b in zip(eager, graph)) / len(eager)
     assert agree >= 0.9
-    ref_ok = sum(o == reference_greedy(model, r.prompt_ids, r.max_new_tokens) for o, r in zip(graph, reqs)) / len(reqs)
+    cpu_model = build_tiny_model()   # same seed -> same weights; the uncached reference runs on CPU
+    ref_ok = sum(o == reference_greedy(cpu_model, r.prompt_ids, r.max_new_tokens) for o, r in zip(graph, reqs)) / len(reqs)
     assert ref_ok >= 0.8
