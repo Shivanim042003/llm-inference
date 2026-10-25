@@ -58,18 +58,24 @@ flowchart LR
 ## Results
 
 <!-- RESULTS:START -->
-**Setup:** model `tiny-random`, float32, hardware: CPU (2 cores), torch 2.14.1+cu130, transformers 5.20.2, run date 2026-10-25 17:54:27 UTC, commit ``.
+**Setup:** model `Qwen/Qwen2.5-0.5B-Instruct`, float16, hardware: Tesla T4, torch 2.11.0+cu130, transformers 5.20.2, run date 2026-10-25 18:22:17 UTC, commit `f7ef35f`.
 
 ### Key findings (auto-generated from the data)
 
-- No batching policy beat sequential serving on SLO capacity in the tested range (the rate grid may be too low to saturate the server).
-- At 8 req/s (the highest rate where continuous-8 meets the SLO), continuous batching has 10x lower p95 TTFT than static batching of the same size (0.04s vs 0.35s). Static batching meets the SLO at up to 8 req/s.
-- Closed-loop peak: **continuous-16** 764 tok/s = 1.3x sequential (589 tok/s).
-- Closed-loop peak: **continuous-8** 1102 tok/s = 1.9x sequential (589 tok/s).
-- Decode step time is nearly flat in batch size: within 1.5x of batch 1 (1.12 ms) up to batch **8**, where decode tokens/s is 8.0x batch 1. This is why batching raises throughput.
-- At batch 8 a decode step takes 1.12 ms, 4.8% of the assumed 20 GB/s peak bandwidth: well below the memory roofline, so the step is not bandwidth-bound; kernel-launch / Python overhead is the likely limiter (check profile_decode.txt).
-- Prefill of a 1024-token prompt takes 7.2 ms when only the last position's logits are computed vs 7.5 ms with full-vocab logits at every position (1.0x).
-- Computing the lm_head only for the last prompt position raises closed-loop throughput 0.91x (1006 -> 917 tok/s) and cuts the share of GPU time spent in prefill from 8% to 8%.
+- Sequential serving never met the SLO at any tested rate, while continuous-16 sustained 4 req/s, continuous-32 sustained 6 req/s, vllm sustained 12 req/s.
+- At 4 req/s (the highest rate where continuous-16 meets the SLO), continuous batching has 51x lower p95 TTFT than static batching of the same size (0.66s vs 33.56s). Static batching meets the SLO at no tested rate.
+- Against vLLM on the same GPU, our best engine (continuous-32, SLO capacity 6 req/s) reaches 50% of vLLM's SLO capacity (12 req/s).
+- Closed-loop peak: **continuous-16** 332 tok/s = 11.2x sequential (30 tok/s).
+- Closed-loop peak: **continuous-32** 509 tok/s = 17.2x sequential (30 tok/s).
+- Closed-loop peak: **static-16** 176 tok/s = 5.9x sequential (30 tok/s).
+- Closed-loop peak: **vllm** 1413 tok/s = 47.6x sequential (30 tok/s).
+- Decode step time is nearly flat in batch size: within 1.5x of batch 1 (108.68 ms) up to batch **128**, where decode tokens/s is 133.5x batch 1. This is why batching raises throughput.
+- At batch 128 a decode step takes 104.21 ms, 4.2% of the assumed 320 GB/s peak bandwidth: well below the memory roofline, so the step is not bandwidth-bound; kernel-launch / Python overhead is the likely limiter (check profile_decode.txt).
+- Prefill of a 2048-token prompt takes 421.5 ms when only the last position's logits are computed vs 440.1 ms with full-vocab logits at every position (1.0x).
+- Computing the lm_head only for the last prompt position does not measurably change closed-loop throughput (291 -> 288 tok/s, 0.99x; run-to-run spread is not shown, so treat differences under ~5% as noise) and moves the share of GPU time spent in prefill from 12% to 12%.
+- float16/int8: 0.27x throughput vs fp32, perplexity 22.455 vs 22.426, greedy outputs match fp32 for the first 58% of tokens on average.
+- float16/nf4: 0.84x throughput vs fp32, perplexity 25.025 vs 22.426, greedy outputs match fp32 for the first 17% of tokens on average.
+- float16/none: 1.15x throughput vs fp32, perplexity 22.417 vs 22.426, greedy outputs match fp32 for the first 98% of tokens on average.
 
 ![scheduler_open_loop](reports/figures/scheduler_open_loop.png)
 
@@ -78,6 +84,8 @@ flowchart LR
 ![microbench](reports/figures/microbench.png)
 
 ![ablation_logits](reports/figures/ablation_logits.png)
+
+![precision](reports/figures/precision.png)
 
 Full tables and methodology: [reports/RESULTS.md](reports/RESULTS.md).
 <!-- RESULTS:END -->

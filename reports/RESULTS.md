@@ -1,21 +1,23 @@
 # Results
 
-**Setup:** model `Qwen/Qwen2.5-0.5B-Instruct`, float16, hardware: Tesla T4, torch 2.11.0+cu130, transformers 5.20.2, run date 2026-10-25 15:40:22 UTC, commit `86d73d4`.
+**Setup:** model `Qwen/Qwen2.5-0.5B-Instruct`, float16, hardware: Tesla T4, torch 2.11.0+cu130, transformers 5.20.2, run date 2026-10-25 18:22:17 UTC, commit `f7ef35f`.
 
 ### Key findings (auto-generated from the data)
 
-- Sequential serving never met the SLO at any tested rate, while continuous-16 sustained 4 req/s, continuous-32 sustained 4 req/s, vllm sustained 12 req/s.
-- At 8 req/s, continuous batching cuts p95 TTFT 1.9x versus static batching of the same size (43.14s vs 22.48s).
-- SLO capacity: continuous-16 4 req/s vs static-16 0 req/s.
-- Against vLLM on the same GPU, our best engine (continuous-16) reaches 33% of vLLM's SLO capacity (4 vs 12 req/s).
-- Closed-loop peak: **continuous-16** 322 tok/s = 10.8x sequential (30 tok/s).
-- Closed-loop peak: **static-16** 170 tok/s = 5.7x sequential (30 tok/s).
-- Closed-loop peak: **vllm** 1437 tok/s = 48.0x sequential (30 tok/s).
-- Decode step time is nearly flat in batch size: within 1.5x of batch 1 (35.33 ms) up to batch **32**, where decode tokens/s is 32.8x batch 1. This is why batching raises throughput.
-- At batch 64 a decode step takes 57.64 ms, 6.4% of the assumed 320 GB/s peak bandwidth: well below the memory roofline, so the step is not bandwidth-bound; kernel-launch / Python overhead is the likely limiter (check profile_decode.txt).
-- float16/int8: 0.28x throughput vs fp32, perplexity 2.486 vs 2.489, 59% greedy-token agreement.
-- float16/nf4: 0.88x throughput vs fp32, perplexity 2.616 vs 2.489, 23% greedy-token agreement.
-- float16/none: 1.18x throughput vs fp32, perplexity 2.488 vs 2.489, 98% greedy-token agreement.
+- Sequential serving never met the SLO at any tested rate, while continuous-16 sustained 4 req/s, continuous-32 sustained 6 req/s, vllm sustained 12 req/s.
+- At 4 req/s (the highest rate where continuous-16 meets the SLO), continuous batching has 51x lower p95 TTFT than static batching of the same size (0.66s vs 33.56s). Static batching meets the SLO at no tested rate.
+- Against vLLM on the same GPU, our best engine (continuous-32, SLO capacity 6 req/s) reaches 50% of vLLM's SLO capacity (12 req/s).
+- Closed-loop peak: **continuous-16** 332 tok/s = 11.2x sequential (30 tok/s).
+- Closed-loop peak: **continuous-32** 509 tok/s = 17.2x sequential (30 tok/s).
+- Closed-loop peak: **static-16** 176 tok/s = 5.9x sequential (30 tok/s).
+- Closed-loop peak: **vllm** 1413 tok/s = 47.6x sequential (30 tok/s).
+- Decode step time is nearly flat in batch size: within 1.5x of batch 1 (108.68 ms) up to batch **128**, where decode tokens/s is 133.5x batch 1. This is why batching raises throughput.
+- At batch 128 a decode step takes 104.21 ms, 4.2% of the assumed 320 GB/s peak bandwidth: well below the memory roofline, so the step is not bandwidth-bound; kernel-launch / Python overhead is the likely limiter (check profile_decode.txt).
+- Prefill of a 2048-token prompt takes 421.5 ms when only the last position's logits are computed vs 440.1 ms with full-vocab logits at every position (1.0x).
+- Computing the lm_head only for the last prompt position does not measurably change closed-loop throughput (291 -> 288 tok/s, 0.99x; run-to-run spread is not shown, so treat differences under ~5% as noise) and moves the share of GPU time spent in prefill from 12% to 12%.
+- float16/int8: 0.27x throughput vs fp32, perplexity 22.455 vs 22.426, greedy outputs match fp32 for the first 58% of tokens on average.
+- float16/nf4: 0.84x throughput vs fp32, perplexity 25.025 vs 22.426, greedy outputs match fp32 for the first 17% of tokens on average.
+- float16/none: 1.15x throughput vs fp32, perplexity 22.417 vs 22.426, greedy outputs match fp32 for the first 98% of tokens on average.
 
 ### Scheduler comparison (open-loop Poisson arrivals)
 
@@ -23,11 +25,11 @@
 
 | config | SLO capacity (req/s) | peak output tok/s | TTFT p95 at capacity (s) | mean decode batch at max load |
 |---|---|---|---|---|
-| sequential | 0.00 | 29.60 | n/a | 1.00 |
-| static-16 | 0.00 | 157.50 | n/a | 6.00 |
-| continuous-16 | 4.00 | 347.13 | 0.12 | 15.88 |
-| continuous-32 | 4.00 | 504.58 | 0.12 | 26.24 |
-| vllm | 12.00 | 1055.95 | 0.25 | n/a |
+| sequential | 0 (SLO never met) | 29.18 | n/a | 1.00 |
+| static-16 | 0 (SLO never met) | 134.71 | n/a | 5.15 |
+| continuous-16 | 4 (true value in [4, 5)) | 350.33 | 0.66 | 15.92 |
+| continuous-32 | 6 (true value in [6, 7)) | 531.73 | 0.21 | 27.48 |
+| vllm | 12 (true value in [12, 16)) | 1419.89 | 0.33 | n/a |
 
 ### Closed-loop throughput
 
@@ -35,10 +37,11 @@
 
 | config | at concurrency | peak tok/s (mean) | std |
 |---|---|---|---|
-| continuous-16 | 32 | 322.30 | 7.62 |
-| sequential | 4 | 29.93 | 0.04 |
-| static-16 | 16 | 170.39 | 5.89 |
-| vllm | 32 | 1436.60 | 17.30 |
+| continuous-16 | 32 | 332.18 | 11.50 |
+| continuous-32 | 64 | 509.38 | 3.89 |
+| sequential | 1 | 29.67 | 0.10 |
+| static-16 | 16 | 175.69 | 7.62 |
+| vllm | 32 | 1412.97 | 6.34 |
 
 ### Where the time goes (microbenchmarks)
 
@@ -46,22 +49,31 @@
 
 | batch | step_ms | tok_per_s | achieved_gb_per_s | bw_utilisation |
 |---|---|---|---|---|
-| 1.000 | 35.328 | 28.307 | 28.058 | 0.088 |
-| 2.000 | 33.126 | 60.376 | 30.018 | 0.094 |
-| 4.000 | 32.908 | 121.552 | 30.408 | 0.095 |
-| 8.000 | 33.651 | 237.733 | 30.110 | 0.094 |
-| 16.000 | 32.843 | 487.162 | 31.617 | 0.099 |
-| 32.000 | 34.451 | 928.848 | 31.602 | 0.099 |
-| 64.000 | 57.644 | 1110.257 | 20.633 | 0.064 |
-| 128.000 | n/a | n/a | n/a | n/a |
+| 1.000 | 108.677 | 9.202 | 9.121 | 0.029 |
+| 2.000 | 72.972 | 27.408 | 13.627 | 0.043 |
+| 4.000 | 55.938 | 71.507 | 17.888 | 0.056 |
+| 8.000 | 33.562 | 238.363 | 30.190 | 0.094 |
+| 16.000 | 33.271 | 480.892 | 31.210 | 0.098 |
+| 32.000 | 33.937 | 942.913 | 32.081 | 0.100 |
+| 64.000 | 57.405 | 1114.886 | 20.719 | 0.065 |
+| 128.000 | 104.208 | 1228.308 | 13.346 | 0.042 |
+
+### Optimisation ablation: last-position logits in prefill
+
+![ablation](figures/ablation_logits.png)
+
+| variant | closed-loop tok/s | prefill time share |
+|---|---|---|
+| full-logits | 290.879 | 0.120 |
+| last-logits | 288.350 | 0.119 |
 
 ### Precision / quantization trade-off
 
 ![precision](figures/precision.png)
 
-| dtype | quant | tok_s | std | gpu_mem_peak_mb | perplexity | eval_tokens | greedy_token_agreement | greedy_exact_match | param_mb |
-|---|---|---|---|---|---|---|---|---|---|
-| float16 | int8 | 67.417 | 4.422 | 1019.264 | 2.486 | 4991 | 0.592 | 0.417 | 601.043 |
-| float16 | nf4 | 216.074 | 14.343 | 870.299 | 2.616 | 4991 | 0.233 | 0.000 | 430.418 |
-| float16 | none | 289.302 | 19.462 | 1368.560 | 2.488 | 4991 | 0.977 | 0.917 | 942.293 |
-| float32 | none | 244.690 | 14.937 | 2707.410 | 2.489 | 4991 | 1.000 | 1.000 | 1884.585 |
+| dtype | quant | tok_s | std | gpu_mem_peak_mb | perplexity | eval_tokens | greedy_token_agreement | greedy_prefix_match | greedy_exact_match | param_mb |
+|---|---|---|---|---|---|---|---|---|---|---|
+| float16 | int8 | 66.505 | 3.515 | 930.311 | 22.455 | 8176 | 0.592 | 0.585 | 0.417 | 601.043 |
+| float16 | nf4 | 206.393 | 15.034 | 780.647 | 25.025 | 8176 | 0.233 | 0.168 | 0.000 | 430.418 |
+| float16 | none | 284.910 | 18.466 | 1279.252 | 22.417 | 8176 | 0.977 | 0.977 | 0.917 | 942.293 |
+| float32 | none | 246.922 | 13.681 | 2526.404 | 22.426 | 8176 | 1.000 | 1.000 | 1.000 | 1884.585 |
