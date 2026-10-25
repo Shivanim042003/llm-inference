@@ -69,9 +69,9 @@ flowchart LR
 - Closed-loop peak: **continuous-32** 509 tok/s = 17.2x sequential (30 tok/s).
 - Closed-loop peak: **static-16** 176 tok/s = 5.9x sequential (30 tok/s).
 - Closed-loop peak: **vllm** 1413 tok/s = 47.6x sequential (30 tok/s).
-- Decode step time is nearly flat in batch size: within 1.5x of batch 1 (34.09 ms) up to batch **32**, where decode tokens/s is 31.4x batch 1. This is why batching raises throughput.
-- At batch 128 a decode step takes 104.29 ms, 4.2% of the assumed 320 GB/s peak bandwidth: well below the memory roofline, so the step is not bandwidth-bound; kernel-launch / Python overhead is the likely limiter (check profile_decode.txt).
-- Prefill of a 2048-token prompt takes 419.1 ms when only the last position's logits are computed vs 434.0 ms with full-vocab logits at every position (1.0x).
+- Decode step time is nearly flat in batch size: within 1.5x of batch 1 (33.29 ms) up to batch **32**, where decode tokens/s is 31.2x batch 1. This is why batching raises throughput.
+- At batch 128 a decode step takes 104.46 ms, 4.2% of the assumed 320 GB/s peak bandwidth: well below the memory roofline, so the step is not bandwidth-bound; kernel-launch / Python overhead is the likely limiter (check profile_decode.txt).
+- Prefill of a 2048-token prompt takes 424.0 ms when only the last position's logits are computed vs 441.8 ms with full-vocab logits at every position (1.0x).
 - Computing the lm_head only for the last prompt position does not measurably change closed-loop throughput (291 -> 288 tok/s, 0.99x; run-to-run spread is not shown, so treat differences under ~5% as noise) and moves the share of GPU time spent in prefill from 12% to 12%.
 - float16/int8: 0.27x throughput vs fp32, perplexity 22.455 vs 22.426, greedy outputs match fp32 for the first 58% of tokens on average.
 - float16/nf4: 0.84x throughput vs fp32, perplexity 25.025 vs 22.426, greedy outputs match fp32 for the first 17% of tokens on average.
