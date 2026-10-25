@@ -8,6 +8,45 @@ Successor to [llm-inference-benchmark-lab](https://github.com/Shivanim042003/llm
 which measured a naive CPU server. This project builds the serving system and benchmarks it
 against a production engine (vLLM).
 
+> **TL;DR.** A from-scratch LLM serving stack for Hugging Face models (continuous batching, OpenAI-compatible
+> streaming server, open-loop load generator) plus the experiments that explain *why* it performs the way it does.
+> On a Colab T4 with Qwen2.5-0.5B, the profile showed decoding was launch-overhead-bound (~9% of memory bandwidth,
+> ~36 ms per step at any batch size). Replacing the growing KV cache with static slots and CUDA graphs raised
+> SLO capacity from **4 to 10 req/s (2.5x)** and closed-loop throughput from **414 to 964 tok/s (2.3x)** on the same
+> model, GPU and load. vLLM reaches 12 req/s and 1399 tok/s on the same setup; this engine is at about 83% and 69% of that.
+
+| Engine (T4, Qwen2.5-0.5B, fp16) | SLO capacity (req/s) | Closed-loop peak (tok/s) |
+|---|---|---|
+| Sequential | 0 (SLO never met) | 26 |
+| Static batching (16) | 0 (SLO never met) | 161 |
+| Continuous batching, dynamic KV cache | 4, in [4, 6) | 414 ± 13 |
+| Static KV slots (eager) | 4, in [4, 6) | 477 ± 11 |
+| **Static KV slots + CUDA graphs** | **10, in [10, 12)** | **964 ± 14** |
+| vLLM (baseline) | 12, in [12, 16) | 1399 |
+
+SLO: TTFT <= 1 s and TPOT <= 100 ms; capacity = highest offered rate where >= 95% of requests meet it, in every seed.
+Open-loop points use 2 seeds; closed-loop points use 3 repeats (mean ± sd).
+
+**What worked**
+- Diagnosing before optimizing: the roofline and profiler showed decode was overhead-bound, which pointed at CUDA graphs.
+- CUDA graphs: decode kernel 3.6-4.6x faster; the gain holds on a second, larger model (Qwen2.5-1.5B: 391 vs 223 tok/s).
+- Continuous vs static batching: 195x lower p95 TTFT at 3 req/s.
+- Prefix caching on a shared-preamble workload: 92% prefix-token hit rate, p95 TTFT 0.65-0.84x of uncached.
+
+**What did not work (kept in the repo on purpose)**
+- Chunked prefill: p95 TPOT 1.01x, p95 TTFT 1.33x *worse* on a long-prompt workload at this load.
+- Computing the lm_head only for the last prompt position: no measurable change (260 -> 268 tok/s, within noise).
+- Quantization on a T4: int8 runs at 0.26x of fp32 throughput, nf4 at 0.81x, and int8/nf4 diverge from fp32
+  outputs (58% / 17% greedy prefix agreement); fp16 is the only useful reduced precision (1.08x, perplexity unchanged).
+- Static slots alone gave only ~15%; most of the gain comes from CUDA graphs.
+
+**Correctness and robustness.** Every engine feature combination is tested token-for-token against an uncached fp64
+reference; the server rejects unsupported options, bounds its queue (503), enforces deadlines, cancels on client
+disconnect, propagates engine failures and drains on shutdown, with tests for each.
+
+**Limits.** One GPU class and two Qwen models; greedy decoding only; the load generator shares the machine's 2 vCPUs
+with the server; numbers are only comparable within a run.
+
 ## What is in here
 
 | Layer | What | Where |
