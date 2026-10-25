@@ -26,7 +26,7 @@
 - Closed-loop peak throughput: 414 -> 964 tok/s (2.33x); the difference is outside one standard deviation of the repeats.
 - Against vLLM on the same GPU, slot+graphs reach 83% of its SLO capacity by lower bounds (10 vs 12 req/s) and 69% of its closed-loop throughput.
 - Chunked prefill (chunk-256) on a workload with ~12% long (~1.3k-token) prompts changes p95 TPOT by 1.01x and p95 TTFT by 1.33x relative to whole-prompt prefill (mean over 4 rates; <1 is better).
-- Prefix caching on a workload where every prompt shares a ~250-token preamble: mean prefix-token hit rate 92%, p95 TTFT 0.65x-0.84x of the uncached engine across rates (<1 is better; rates beyond saturation are dominated by queueing).
+- Prefix caching on a workload where every prompt shares a ~250-token preamble: mean prefix-token hit rate 89%, p95 TTFT 0.71x-0.96x of the uncached engine across rates (<1 is better; rates beyond saturation are dominated by queueing).
 - On the larger second model the slot+graph engine reaches 391 tok/s vs 223 for the dynamic-cache engine at their best concurrency (1.75x), so the ranking holds across model sizes.
 
 ### Scheduler comparison (open-loop Poisson arrivals)
@@ -135,16 +135,16 @@
 
 | config | offered_rps | ttft_p95 | tok | good | att | n |
 |---|---|---|---|---|---|---|
-| no-prefix-cache | 2 | 0.091 | 84.693 | 1.823 | 1.000 | 2 |
-| no-prefix-cache | 4 | 0.129 | 178.002 | 3.810 | 1.000 | 2 |
-| no-prefix-cache | 8 | 0.146 | 363.645 | 7.576 | 1.000 | 2 |
-| no-prefix-cache | 12 | 0.252 | 513.363 | 10.765 | 1.000 | 2 |
-| no-prefix-cache | 16 | 3.798 | 643.541 | 3.962 | 0.292 | 2 |
-| prefix-cache | 2 | 0.072 | 84.767 | 1.825 | 1.000 | 2 |
-| prefix-cache | 4 | 0.104 | 177.966 | 3.809 | 1.000 | 2 |
-| prefix-cache | 8 | 0.123 | 363.691 | 7.577 | 1.000 | 2 |
-| prefix-cache | 12 | 0.183 | 515.108 | 10.802 | 1.000 | 2 |
-| prefix-cache | 16 | 2.481 | 680.176 | 6.327 | 0.440 | 2 |
+| no-prefix-cache | 2 | 0.075 | 84.729 | 1.824 | 1.000 | 2 |
+| no-prefix-cache | 4 | 0.132 | 178.049 | 3.811 | 1.000 | 2 |
+| no-prefix-cache | 8 | 0.132 | 363.657 | 7.577 | 1.000 | 2 |
+| no-prefix-cache | 12 | 0.224 | 514.594 | 10.791 | 1.000 | 2 |
+| no-prefix-cache | 16 | 3.251 | 657.380 | 4.714 | 0.340 | 2 |
+| prefix-cache | 2 | 0.072 | 84.725 | 1.824 | 1.000 | 2 |
+| prefix-cache | 4 | 0.108 | 178.052 | 3.811 | 1.000 | 2 |
+| prefix-cache | 8 | 0.127 | 363.801 | 7.580 | 1.000 | 2 |
+| prefix-cache | 12 | 0.185 | 515.141 | 10.802 | 1.000 | 2 |
+| prefix-cache | 16 | 2.294 | 684.354 | 7.301 | 0.504 | 2 |
 
 ### Second model size
 

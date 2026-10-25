@@ -40,9 +40,9 @@ Open-loop points use 2 seeds; closed-loop points use 3 repeats (mean ± sd).
   outputs (58% / 17% greedy prefix agreement); fp16 is the only useful reduced precision (1.08x, perplexity unchanged).
 - Static slots alone gave only ~15%; most of the gain comes from CUDA graphs.
 
-**Correctness and robustness.** Verified on the T4 with Qwen2.5-0.5B: CUDA-graph, eager-slot and dynamic-cache engines produce identical greedy tokens on 12 mixed-length prompts.
- Every engine feature combination is tested token-for-token against an uncached fp64
-reference; the server rejects unsupported options, bounds its queue (503), enforces deadlines, cancels on client
+**Correctness and robustness.** Validated on the T4 with Qwen2.5-0.5B on a small set (12 mixed-length prompts, 48 tokens): CUDA-graph, eager-slot and dynamic-cache engines produced identical greedy tokens. This is a spot check, not a proof; fp16 kernels can differ on other inputs.
+ Engine feature combinations are validated on the tested configurations (many shapes, GQA variants, slot reuse,
+chunking, prefix hits) against an uncached fp64 reference on CPU; the server rejects unsupported options, bounds its queue (503), enforces deadlines, cancels on client
 disconnect, propagates engine failures and drains on shutdown, with tests for each.
 
 **Limits.** One GPU class and two Qwen models; greedy decoding only; the load generator shares the machine's 2 vCPUs
@@ -154,7 +154,7 @@ merged text (tested).
 - Closed-loop peak throughput: 414 -> 964 tok/s (2.33x); the difference is outside one standard deviation of the repeats.
 - Against vLLM on the same GPU, slot+graphs reach 83% of its SLO capacity by lower bounds (10 vs 12 req/s) and 69% of its closed-loop throughput.
 - Chunked prefill (chunk-256) on a workload with ~12% long (~1.3k-token) prompts changes p95 TPOT by 1.01x and p95 TTFT by 1.33x relative to whole-prompt prefill (mean over 4 rates; <1 is better).
-- Prefix caching on a workload where every prompt shares a ~250-token preamble: mean prefix-token hit rate 92%, p95 TTFT 0.65x-0.84x of the uncached engine across rates (<1 is better; rates beyond saturation are dominated by queueing).
+- Prefix caching on a workload where every prompt shares a ~250-token preamble: mean prefix-token hit rate 89%, p95 TTFT 0.71x-0.96x of the uncached engine across rates (<1 is better; rates beyond saturation are dominated by queueing).
 - On the larger second model the slot+graph engine reaches 391 tok/s vs 223 for the dynamic-cache engine at their best concurrency (1.75x), so the ranking holds across model sizes.
 
 ![engines](reports/figures/engines.png)

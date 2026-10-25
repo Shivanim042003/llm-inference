@@ -29,8 +29,9 @@ WORKLOADS = {
 
 # "shared": every prompt starts with the same ~250-token system-style preamble (RAG / agent / few-shot pattern),
 # followed by a short unique question. This is the workload prefix caching targets.
+_prefix_rng = random.Random(2024)          # ONE generator, so the deterministic preamble is varied text
 SHARED_PREFIX = "You are a careful assistant for a systems team. Background notes: " + " ".join(
-    random.Random(2024).choice(WORDS) for _ in range(200)) + "."
+    _prefix_rng.choice(WORDS) for _ in range(200)) + "."
 
 
 def make_prompt(rnd: random.Random, n_words: int) -> str:

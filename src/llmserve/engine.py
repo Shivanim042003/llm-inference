@@ -110,7 +110,7 @@ class Engine:
         self.cache = None
         self.mask = None
         self.next_ids = None
-        self.step_log: List[tuple] = []  # (t, kind, batch_size, seconds, tokens_in_step)
+        self.step_log = collections.deque(maxlen=200_000)  # (t, kind, batch_size, seconds, tokens_in_step); bounded
         self.completed = 0
 
         self._cv = threading.Condition()
