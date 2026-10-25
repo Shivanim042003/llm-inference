@@ -31,7 +31,7 @@ Open-loop points use 2 seeds; closed-loop points use 3 repeats (mean ± sd).
 - Diagnosing before optimizing: the roofline and profiler showed decode was overhead-bound, which pointed at CUDA graphs.
 - CUDA graphs: decode kernel 3.6-4.6x faster; the gain holds on a second, larger model (Qwen2.5-1.5B: 391 vs 223 tok/s).
 - Continuous vs static batching: 195x lower p95 TTFT at 3 req/s.
-- Prefix caching on a shared-preamble workload: 92% prefix-token hit rate, p95 TTFT 0.65-0.84x of uncached.
+- Prefix caching on a shared-preamble workload: 89% prefix-token hit rate, p95 TTFT 0.71-0.96x of uncached (a modest gain that shrinks near saturation).
 
 **What did not work (kept in the repo on purpose)**
 - Chunked prefill: p95 TPOT 1.01x, p95 TTFT 1.33x *worse* on a long-prompt workload at this load.
