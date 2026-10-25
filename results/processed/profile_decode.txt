@@ -1,0 +1,41 @@
+=== decode step, batch=1, ctx=256 ===
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                               aten::mm         5.59%       2.653ms         7.48%       3.552ms      36.623us       4.604ms        57.88%       4.604ms      47.461us            97  
+void gemv2T_kernel_val<int, int, __half, __half, __h...         0.00%       0.000us         0.00%       0.000us       0.000us       2.360ms        29.67%       2.360ms      32.781us            72  
+std::enable_if<true, void>::type internal::gemvx::ke...         0.00%       0.000us         0.00%       0.000us       0.000us       1.329ms        16.71%       1.329ms       1.329ms             1  
+std::enable_if<!(false), void>::type internal::gemvx...         0.00%       0.000us         0.00%       0.000us       0.000us     914.568us        11.50%     914.568us      38.107us            24  
+                                            aten::copy_         4.53%       2.153ms         8.80%       4.177ms      13.093us     703.052us         8.84%     703.052us       2.204us           319  
+                                              aten::mul         7.39%       3.510ms        11.34%       5.383ms      20.012us     524.954us         6.60%     524.954us       1.952us           269  
+                                            aten::addmm         4.70%       2.230ms         6.11%       2.901ms      40.287us     496.210us         6.24%     496.210us       6.892us            72  
+void gemv2T_kernel_val<int, int, __half, __half, __h...         0.00%       0.000us         0.00%       0.000us       0.000us     496.210us         6.24%     496.210us       6.892us            72  
+                                              aten::cat         3.87%       1.837ms        12.12%       5.753ms      39.679us     409.012us         5.14%     413.108us       2.849us           145  
+void at::native::unrolled_elementwise_kernel<at::nat...         0.00%       0.000us         0.00%       0.000us       0.000us     347.350us         4.37%     347.350us       2.847us           122  
+void at::native::(anonymous namespace)::CatArrayBatc...         0.00%       0.000us         0.00%       0.000us       0.000us     298.711us         3.76%     298.711us       3.112us            96  
+                                              aten::add         3.83%       1.819ms         5.99%       2.842ms      19.599us     219.100us         2.75%     219.100us       1.511us           145  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 47.480ms
+Self CUDA time total: 7.954ms
+
+
+=== decode step, batch=32, ctx=256 ===
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                            aten::copy_         4.58%       2.163ms         8.85%       4.178ms      13.097us       8.803ms        27.64%       8.803ms      27.596us           319  
+void at::native::elementwise_kernel<128, 2, at::nati...         0.00%       0.000us         0.00%       0.000us       0.000us       6.903ms        21.67%       6.903ms     143.818us            48  
+                                              aten::mul         7.72%       3.644ms        11.76%       5.551ms      20.634us       6.774ms        21.27%       6.774ms      25.183us           269  
+void at::native::vectorized_elementwise_kernel<4, at...         0.00%       0.000us         0.00%       0.000us       0.000us       6.147ms        19.30%       6.147ms     122.941us            50  
+                                              aten::bmm         2.82%       1.333ms         3.68%       1.737ms      36.195us       6.027ms        18.92%       6.027ms     125.566us            48  
+                                               aten::mm         6.34%       2.991ms         8.84%       4.174ms      43.035us       5.835ms        18.32%       5.835ms      60.153us            97  
+turing_fp16_s1688gemm_fp16_128x64_sliced1x2_ldg8_f2f...         0.00%       0.000us         0.00%       0.000us       0.000us       4.156ms        13.05%       4.156ms      84.810us            49  
+void gemv2T_kernel_val<int, int, float, float, float...         0.00%       0.000us         0.00%       0.000us       0.000us       3.271ms        10.27%       3.271ms     136.275us            24  
+std::enable_if<!(false), void>::type internal::gemvx...         0.00%       0.000us         0.00%       0.000us       0.000us       2.757ms         8.65%       2.757ms     114.857us            24  
+                                              aten::cat         3.78%       1.783ms        10.74%       5.070ms      34.965us       2.448ms         7.69%       2.480ms      17.101us           145  
+void at::native::unrolled_elementwise_kernel<at::nat...         0.00%       0.000us         0.00%       0.000us       0.000us       1.724ms         5.41%       1.724ms      14.131us           122  
+void at::native::(anonymous namespace)::CatArrayBatc...         0.00%       0.000us         0.00%       0.000us       0.000us       1.671ms         5.25%       1.671ms      17.404us            96  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 47.195ms
+Self CUDA time total: 31.851ms
+

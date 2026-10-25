@@ -1,0 +1,15 @@
+{
+  "date_utc": "2026-10-25 15:40:22",
+  "python": "3.13.16",
+  "platform": "Linux-6.6.122+-x86_64-with-glibc2.39",
+  "cpu_count": 2,
+  "profile_model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "dtype": "float16",
+  "torch": "2.11.0+cu130",
+  "transformers": "5.20.2",
+  "cuda_available": true,
+  "gpu": "Tesla T4",
+  "cuda": "13.0",
+  "gpu_mem_gb": 14.6,
+  "git_commit": "86d73d4"
+}
