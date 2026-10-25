@@ -11,9 +11,9 @@
 - Closed-loop peak: **continuous-32** 509 tok/s = 17.2x sequential (30 tok/s).
 - Closed-loop peak: **static-16** 176 tok/s = 5.9x sequential (30 tok/s).
 - Closed-loop peak: **vllm** 1413 tok/s = 47.6x sequential (30 tok/s).
-- Decode step time is nearly flat in batch size: within 1.5x of batch 1 (108.68 ms) up to batch **128**, where decode tokens/s is 133.5x batch 1. This is why batching raises throughput.
-- At batch 128 a decode step takes 104.21 ms, 4.2% of the assumed 320 GB/s peak bandwidth: well below the memory roofline, so the step is not bandwidth-bound; kernel-launch / Python overhead is the likely limiter (check profile_decode.txt).
-- Prefill of a 2048-token prompt takes 421.5 ms when only the last position's logits are computed vs 440.1 ms with full-vocab logits at every position (1.0x).
+- Decode step time is nearly flat in batch size: within 1.5x of batch 1 (34.09 ms) up to batch **32**, where decode tokens/s is 31.4x batch 1. This is why batching raises throughput.
+- At batch 128 a decode step takes 104.29 ms, 4.2% of the assumed 320 GB/s peak bandwidth: well below the memory roofline, so the step is not bandwidth-bound; kernel-launch / Python overhead is the likely limiter (check profile_decode.txt).
+- Prefill of a 2048-token prompt takes 419.1 ms when only the last position's logits are computed vs 434.0 ms with full-vocab logits at every position (1.0x).
 - Computing the lm_head only for the last prompt position does not measurably change closed-loop throughput (291 -> 288 tok/s, 0.99x; run-to-run spread is not shown, so treat differences under ~5% as noise) and moves the share of GPU time spent in prefill from 12% to 12%.
 - float16/int8: 0.27x throughput vs fp32, perplexity 22.455 vs 22.426, greedy outputs match fp32 for the first 58% of tokens on average.
 - float16/nf4: 0.84x throughput vs fp32, perplexity 25.025 vs 22.426, greedy outputs match fp32 for the first 17% of tokens on average.
@@ -49,14 +49,14 @@
 
 | batch | step_ms | tok_per_s | achieved_gb_per_s | bw_utilisation |
 |---|---|---|---|---|
-| 1.000 | 108.677 | 9.202 | 9.121 | 0.029 |
-| 2.000 | 72.972 | 27.408 | 13.627 | 0.043 |
-| 4.000 | 55.938 | 71.507 | 17.888 | 0.056 |
-| 8.000 | 33.562 | 238.363 | 30.190 | 0.094 |
-| 16.000 | 33.271 | 480.892 | 31.210 | 0.098 |
-| 32.000 | 33.937 | 942.913 | 32.081 | 0.100 |
-| 64.000 | 57.405 | 1114.886 | 20.719 | 0.065 |
-| 128.000 | 104.208 | 1228.308 | 13.346 | 0.042 |
+| 1.000 | 34.093 | 29.332 | 29.074 | 0.091 |
+| 2.000 | 34.307 | 58.297 | 28.984 | 0.091 |
+| 4.000 | 33.422 | 119.681 | 29.940 | 0.094 |
+| 8.000 | 34.214 | 233.824 | 29.615 | 0.093 |
+| 16.000 | 34.825 | 459.434 | 29.817 | 0.093 |
+| 32.000 | 34.771 | 920.313 | 31.312 | 0.098 |
+| 64.000 | 57.410 | 1114.789 | 20.718 | 0.065 |
+| 128.000 | 104.291 | 1227.339 | 13.335 | 0.042 |
 
 ### Optimisation ablation: last-position logits in prefill
 

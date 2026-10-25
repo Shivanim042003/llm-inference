@@ -59,7 +59,10 @@ def decode_curve(model, device, vocab, batches, ctx=256, steps=8):
     from .engine import tuples_to_cache
 
     rows = []
-    for b in batches:
+    _global_warm = True  # run the whole sweep once untimed so cuBLAS/allocator init is not charged to batch 1
+    for _pass in (0, 1):
+      rows = []
+      for b in batches:
         try:
             ids = torch.randint(3, vocab, (b, ctx), device=device)
             out = forward_last_logits(model, ids, use_cache=True)   # avoids a [B, ctx, vocab] logits tensor
