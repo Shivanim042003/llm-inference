@@ -21,7 +21,7 @@ STATE = {}
 
 
 def build_app(model_id, mode="continuous", max_batch=16, dtype="float16", quant="none",
-              max_prefill_per_step=2, max_ctx=4096):
+              max_prefill_per_step=2, max_ctx=4096, last_logits_only=True):
     model, tok, eos_ids, device = load_model(model_id, dtype=dtype, quant=quant)
     if mode == "sequential":
         max_batch, policy = 1, "continuous"
@@ -32,7 +32,8 @@ def build_app(model_id, mode="continuous", max_batch=16, dtype="float16", quant=
     else:
         raise ValueError(mode)
     engine = Engine(model, eos_ids=eos_ids, device=device, max_batch=max_batch, policy=policy,
-                    max_prefill_per_step=max_prefill_per_step, max_ctx=max_ctx)
+                    max_prefill_per_step=max_prefill_per_step, max_ctx=max_ctx,
+                    last_logits_only=last_logits_only)
     footprint = model_footprint(model)
     STATE.update(engine=engine, tok=tok, model_id=model_id, mode=mode, dtype=dtype, quant=quant,
                  device=device, footprint=footprint)
@@ -47,7 +48,8 @@ def build_app(model_id, mode="continuous", max_batch=16, dtype="float16", quant=
     @app.get("/health")
     def health():
         return {"status": "healthy", "model": model_id, "mode": mode, "device": device,
-                "dtype": dtype, "quant": quant, "max_batch": engine.max_batch}
+                "dtype": dtype, "quant": quant, "max_batch": engine.max_batch,
+                "last_logits_only": last_logits_only}
 
     @app.get("/stats")
     def stats():
@@ -159,10 +161,13 @@ def main():
     p.add_argument("--dtype", default="float16")
     p.add_argument("--quant", default="none", choices=["none", "int8", "nf4"])
     p.add_argument("--max-ctx", type=int, default=4096)
+    p.add_argument("--full-logits", action="store_true",
+                   help="ablation: compute full-vocab logits for every prompt position during prefill")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8000)
     a = p.parse_args()
-    app = build_app(a.model, a.mode, a.max_batch, a.dtype, a.quant, a.max_prefill_per_step, a.max_ctx)
+    app = build_app(a.model, a.mode, a.max_batch, a.dtype, a.quant, a.max_prefill_per_step, a.max_ctx,
+                     last_logits_only=not a.full_logits)
     uvicorn.run(app, host=a.host, port=a.port, log_level="warning")
 
 

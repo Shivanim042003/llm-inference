@@ -34,13 +34,19 @@ PROMPTS = [
 
 
 def load_eval_text(max_chars=60000):
-    try:
-        from datasets import load_dataset
+    """WikiText-2 test split; falls back to a built-in paragraph and says why (the fallback is NOT comparable)."""
+    errors = []
+    for name in ("Salesforce/wikitext", "wikitext"):
+        try:
+            from datasets import load_dataset
 
-        ds = load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
-        return "\n\n".join(ds["text"])[:max_chars], "wikitext-2-raw-v1/test"
-    except Exception:
-        return FALLBACK_TEXT[:max_chars], "built-in fallback paragraph"
+            ds = load_dataset(name, "wikitext-2-raw-v1", split="test")
+            text = "\n\n".join(t for t in ds["text"] if t.strip())
+            return text[:max_chars], f"{name}/wikitext-2-raw-v1/test"
+        except Exception as exc:
+            errors.append(f"{name}: {type(exc).__name__}: {str(exc)[:120]}")
+    print("WARNING: wikitext unavailable, using built-in fallback text:", errors, flush=True)
+    return FALLBACK_TEXT[:max_chars], "built-in fallback paragraph (NOT wikitext)"
 
 
 @torch.no_grad()
@@ -71,13 +77,22 @@ def greedy_outputs(model, tok, device, n_new=48):
 
 
 def agreement(ref, other):
-    """Mean fraction of positions where greedy tokens match, and fraction of fully identical outputs."""
-    pos, exact = [], 0
+    """(position-wise agreement, mean matching-prefix fraction, exact-match rate) of greedy outputs.
+
+    Position-wise agreement keeps counting after the first divergence, where the texts are no longer
+    aligned, so it understates similarity; the matching-prefix fraction is the fairer measure.
+    """
+    pos, prefix, exact = [], [], 0
     for a, b in zip(ref, other):
         n = min(len(a), len(b))
-        pos.append(sum(x == y for x, y in zip(a[:n], b[:n])) / max(max(len(a), len(b)), 1))
+        denom = max(max(len(a), len(b)), 1)
+        pos.append(sum(x == y for x, y in zip(a[:n], b[:n])) / denom)
+        k = 0
+        while k < n and a[k] == b[k]:
+            k += 1
+        prefix.append(k / denom)
         exact += a == b
-    return sum(pos) / len(pos), exact / len(ref)
+    return sum(pos) / len(pos), sum(prefix) / len(prefix), exact / len(ref)
 
 
 def run(model_id, configs, outpath):
@@ -93,11 +108,11 @@ def run(model_id, configs, outpath):
             outs = greedy_outputs(model, tok, device)
             if ref_out is None:
                 ref_out = outs
-            tok_agree, exact = agreement(ref_out, outs)
+            tok_agree, prefix_match, exact = agreement(ref_out, outs)
             fp = model_footprint(model)
             rows.append({"dtype": dtype, "quant": quant, "perplexity": ppl, "eval_tokens": ntok,
                          "eval_text": source, "greedy_token_agreement": tok_agree,
-                         "greedy_exact_match": exact, "param_mb": fp["param_bytes"] / 2**20})
+                         "greedy_prefix_match": prefix_match, "greedy_exact_match": exact, "param_mb": fp["param_bytes"] / 2**20})
             del model
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()

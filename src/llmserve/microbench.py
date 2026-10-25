@@ -11,7 +11,7 @@ import time
 import pandas as pd
 import torch
 
-from .engine import cache_to_tuples
+from .engine import cache_to_tuples, forward_last_logits
 from .models import load_model, model_footprint
 
 
@@ -37,11 +37,19 @@ def _timed(fn, device, warmup=2, iters=5):
 
 @torch.no_grad()
 def prefill_curve(model, device, vocab, lengths, batch=1):
+    """Prefill cost with full-vocab logits at every position vs only the last position."""
     rows = []
     for L in lengths:
         ids = torch.randint(3, vocab, (batch, L), device=device)
-        sec = _timed(lambda: model(input_ids=ids, use_cache=True), device)
-        rows.append({"batch": batch, "prompt_len": L, "seconds": sec, "tok_per_s": batch * L / sec})
+        for variant, fn in (("full_logits", lambda: model(input_ids=ids, use_cache=True)),
+                            ("last_logits", lambda: forward_last_logits(model, ids, use_cache=True))):
+            try:
+                sec = _timed(fn, device)
+            except torch.cuda.OutOfMemoryError:
+                torch.cuda.empty_cache()
+                continue
+            rows.append({"variant": variant, "batch": batch, "prompt_len": L, "seconds": sec,
+                         "tok_per_s": batch * L / sec})
     return pd.DataFrame(rows)
 
 
@@ -54,8 +62,9 @@ def decode_curve(model, device, vocab, batches, ctx=256, steps=8):
     for b in batches:
         try:
             ids = torch.randint(3, vocab, (b, ctx), device=device)
-            out = model(input_ids=ids, use_cache=True)
+            out = forward_last_logits(model, ids, use_cache=True)   # avoids a [B, ctx, vocab] logits tensor
             base = [(k.clone(), v.clone()) for k, v in cache_to_tuples(out.past_key_values)]
+            del out
             nxt = torch.randint(3, vocab, (b, 1), device=device)
             mask = torch.ones(b, ctx + 1, dtype=torch.long, device=device)
             pos = torch.full((b, 1), ctx, device=device)
@@ -82,7 +91,7 @@ def profile_decode(model, device, vocab, batch, ctx=256, top=12):
 
     ids = torch.randint(3, vocab, (batch, ctx), device=device)
     with torch.no_grad():
-        out = model(input_ids=ids, use_cache=True)
+        out = forward_last_logits(model, ids, use_cache=True)
         base = [(k.clone(), v.clone()) for k, v in cache_to_tuples(out.past_key_values)]
         nxt = torch.randint(3, vocab, (batch, 1), device=device)
         mask = torch.ones(batch, ctx + 1, dtype=torch.long, device=device)

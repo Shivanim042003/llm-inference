@@ -39,6 +39,27 @@ def tuples_to_cache(tuples):
     return cache
 
 
+_LTK = {"kw": None}  # which "keep only the last logits" kwarg this transformers version supports
+
+
+def forward_last_logits(model, input_ids, **kwargs):
+    """Forward pass that only computes the lm_head for the final position.
+
+    Prefill otherwise projects every prompt position onto the full vocabulary
+    (prompt_len x hidden x vocab FLOPs, and a [B, L, vocab] logits tensor) only to discard all but the last row.
+    """
+    candidates = [_LTK["kw"]] if _LTK["kw"] else ["logits_to_keep", "num_logits_to_keep"]
+    for kw in candidates:
+        try:
+            out = model(input_ids=input_ids, **{kw: 1}, **kwargs)
+            _LTK["kw"] = kw
+            return out
+        except TypeError:
+            continue
+    _LTK["kw"] = None
+    return model(input_ids=input_ids, **kwargs)
+
+
 @dataclass
 class GenRequest:
     prompt_ids: List[int]
@@ -55,7 +76,7 @@ class GenRequest:
 
 class Engine:
     def __init__(self, model, eos_ids=(), device="cpu", max_batch=8, policy="continuous",
-                 max_prefill_per_step=2, max_ctx=4096, log_steps=True):
+                 max_prefill_per_step=2, max_ctx=4096, log_steps=True, last_logits_only=True):
         assert policy in ("continuous", "static")
         self.model = model
         self.eos_ids = set(eos_ids)
@@ -65,6 +86,7 @@ class Engine:
         self.max_prefill_per_step = max_prefill_per_step
         self.max_ctx = max_ctx
         self.log_steps = log_steps
+        self.last_logits_only = last_logits_only
 
         self.pending = collections.deque()
         self.active: List[GenRequest] = []
@@ -107,7 +129,8 @@ class Engine:
 
     def stats(self):
         return {"active": len(self.active), "pending": len(self.pending),
-                "completed": self.completed, "max_batch": self.max_batch, "policy": self.policy}
+                "completed": self.completed, "max_batch": self.max_batch, "policy": self.policy,
+                "last_logits_only": self.last_logits_only}
 
     # ------------------------------------------------------------------ loop
     def _loop(self):
@@ -142,7 +165,10 @@ class Engine:
     def _admit(self, req: GenRequest):
         t0 = time.perf_counter()
         ids = torch.tensor([req.prompt_ids], device=self.device)
-        out = self.model(input_ids=ids, use_cache=True)
+        if self.last_logits_only:
+            out = forward_last_logits(self.model, ids, use_cache=True)
+        else:
+            out = self.model(input_ids=ids, use_cache=True)
         tok = int(out.logits[0, -1].argmax())
         finished = self._emit(req, tok)
         if self.log_steps:

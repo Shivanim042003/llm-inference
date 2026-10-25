@@ -92,27 +92,33 @@ def scheduler_section(findings):
     plt.savefig(FIGS / "scheduler_open_loop.png", dpi=150)
     plt.close()
 
-    # SLO capacity: highest offered rate where >=95% of requests meet both SLOs and nothing failed
-    rows = []
+    # SLO capacity: highest offered rate where >=95% of requests meet both SLOs and nothing failed.
+    # It is only known to lie between that rate and the next tested rate; if it equals the highest
+    # tested rate the configuration never saturated and the capacity is a lower bound (">=").
+    rows, cap, upper = [], {}, {}
     for c in cfgs:
         g = df[df["config"] == c].sort_values("offered_rps")
         okg = g[(g["slo_attainment"] >= 0.95) & (g["failed"] == 0)]
-        cap = float(okg["offered_rps"].max()) if len(okg) else 0.0
-        at = g[g["offered_rps"] == cap].iloc[0] if len(okg) else None
-        rows.append({"config": c, "SLO capacity (req/s)": cap,
+        capv = float(okg["offered_rps"].max()) if len(okg) else 0.0
+        higher = g[g["offered_rps"] > capv]["offered_rps"]
+        up = float(higher.min()) if len(higher) else float("inf")
+        cap[c], upper[c] = capv, up
+        at = g[g["offered_rps"] == capv].iloc[0] if len(okg) else None
+        label = (f">= {capv:g} (never saturated)" if up == float("inf") and capv > 0
+                 else f"{capv:g} (true value in [{capv:g}, {up:g}))" if capv > 0 else "0 (SLO never met)")
+        rows.append({"config": c, "SLO capacity (req/s)": label,
                      "peak output tok/s": float(g["output_tok_per_s"].max()),
                      "TTFT p95 at capacity (s)": float(at["ttft_p95"]) if at is not None else float("nan"),
-                     "mean decode batch at max load": float(g.iloc[-1].get("mean_decode_batch", float("nan")))
-                     if "mean_decode_batch" in g else float("nan")})
+                     "mean decode batch at max load": float(g.iloc[-1]["mean_decode_batch"])
+                     if "mean_decode_batch" in g and g.iloc[-1]["mean_decode_batch"] == g.iloc[-1]["mean_decode_batch"] else float("nan")})
     tab = pd.DataFrame(rows)
     tab.to_csv(PROC / "slo_capacity.csv", index=False)
 
-    cap = dict(zip(tab["config"], tab["SLO capacity (req/s)"]))
     others = [c for c in cap if c != "sequential"]
     best = max(others, key=lambda c: cap[c], default=None)
     if cap.get("sequential", 0) > 0 and best:
         if cap[best] > cap["sequential"]:
-            findings.append(f"Within the SLO, **{best}** sustains **{cap[best]/cap['sequential']:.1f}x** the request "
+            findings.append(f"Within the SLO, **{best}** sustains at least {cap[best]/cap['sequential']:.1f}x the request "
                             f"rate of sequential serving ({cap[best]:g} vs {cap['sequential']:g} req/s).")
         else:
             findings.append("No batching policy beat sequential serving on SLO capacity in the tested range "
@@ -120,25 +126,30 @@ def scheduler_section(findings):
     elif best and cap[best] > 0:
         findings.append("Sequential serving never met the SLO at any tested rate, while "
                         + ", ".join(f"{c} sustained {cap[c]:g} req/s" for c in others if cap[c] > 0) + ".")
+    # continuous vs static at the highest rate where continuous still meets the SLO (not in overload)
     for st, co in (("static-16", "continuous-16"), ("static-8", "continuous-8")):
-        if st in cap and co in cap:
+        if st in cap and co in cap and cap[co] > 0:
             gs = df[df["config"] == st].set_index("offered_rps")
             gc = df[df["config"] == co].set_index("offered_rps")
-            common = sorted(set(gs.index) & set(gc.index))
-            if common:
-                r = common[-1]
-                a, b = gs.loc[r, "ttft_p95"], gc.loc[r, "ttft_p95"]
-                if b > 0 and a == a and b == b:
-                    findings.append(f"At {r:g} req/s, continuous batching cuts p95 TTFT {a/b:.1f}x versus static "
-                                    f"batching of the same size ({_fmt(a)}s vs {_fmt(b)}s).")
-                findings.append(f"SLO capacity: {co} {cap[co]:g} req/s vs {st} {cap[st]:g} req/s.")
+            r = cap[co]
+            if r in gs.index and r in gc.index:
+                x, y = gs.loc[r, "ttft_p95"], gc.loc[r, "ttft_p95"]
+                if y > 0 and x == x and y == y:
+                    findings.append(f"At {r:g} req/s (the highest rate where {co} meets the SLO), continuous batching has "
+                                    f"{x/y:.0f}x lower p95 TTFT than static batching of the same size "
+                                    f"({_fmt(y)}s vs {_fmt(x)}s). Static batching meets the SLO at "
+                                    f"{'no tested rate' if cap[st] == 0 else f'up to {cap[st]:g} req/s'}.")
             break
     if "vllm" in cap and cap["vllm"] > 0:
         ours = max((c for c in cap if c.startswith("continuous")), key=lambda c: cap[c], default=None)
         if ours and cap[ours] > 0:
-            findings.append(f"Against vLLM on the same GPU, our best engine ({ours}) reaches "
-                            f"{100*cap[ours]/cap['vllm']:.0f}% of vLLM's SLO capacity "
-                            f"({cap[ours]:g} vs {cap['vllm']:g} req/s).")
+            ratio = cap[ours] / cap["vllm"]
+            censored = upper["vllm"] == float("inf")
+            findings.append(
+                f"Against vLLM on the same GPU, our best engine ({ours}, SLO capacity {cap[ours]:g} req/s) reaches "
+                + (f"at most {100*ratio:.0f}% of vLLM's SLO capacity (vLLM met the SLO at every rate tested, up to "
+                   f"{cap['vllm']:g} req/s, so its true capacity is higher)" if censored
+                   else f"{100*ratio:.0f}% of vLLM's SLO capacity ({cap['vllm']:g} req/s)") + ".")
     return ("### Scheduler comparison (open-loop Poisson arrivals)\n\n"
             "![scheduler](figures/scheduler_open_loop.png)\n\n" + md_table(tab) + "\n")
 
@@ -189,7 +200,9 @@ def microbench_section(findings):
     ax[1].set_xscale("log", base=2)
     _style(ax[1], "decode batch size", "tokens/s (engine only)", "Decode throughput")
     if pre is not None:
-        ax[2].plot(pre["prompt_len"], pre["tok_per_s"], marker="o", color="#d98a1c")
+        for variant, gp in (pre.groupby("variant") if "variant" in pre else [("prefill", pre)]):
+            ax[2].plot(gp["prompt_len"], gp["tok_per_s"], marker="o", label=variant)
+        ax[2].legend(frameon=False, fontsize=8)
         ax[2].set_xscale("log", base=2)
     _style(ax[2], "prompt length (tokens)", "prefill tokens/s", "Prefill throughput")
     plt.tight_layout()
@@ -212,6 +225,13 @@ def microbench_section(findings):
                 if util < 0.3 else "approaching the memory roofline")
         findings.append(f"At batch {int(last['batch'])} a decode step takes {_fmt(last['step_ms'])} ms, "
                         f"{_fmt(100*util,1)}% of the assumed {peak_bw:g} GB/s peak bandwidth: {tail}.")
+    if pre is not None and "variant" in pre:
+        pv = pre.pivot_table(index="prompt_len", columns="variant", values="seconds")
+        if {"full_logits", "last_logits"} <= set(pv.columns):
+            big = pv.index.max()
+            findings.append(f"Prefill of a {int(big)}-token prompt takes {1e3*pv.loc[big,'last_logits']:.1f} ms when only the "
+                            f"last position's logits are computed vs {1e3*pv.loc[big,'full_logits']:.1f} ms with full-vocab logits "
+                            f"at every position ({pv.loc[big,'full_logits']/pv.loc[big,'last_logits']:.1f}x).")
     cols = ["batch", "step_ms", "tok_per_s", "achieved_gb_per_s", "bw_utilisation"]
     return ("### Where the time goes (microbenchmarks)\n\n![microbench](figures/microbench.png)\n\n"
             + md_table(dec[cols], 3) + "\n")
@@ -255,11 +275,53 @@ def precision_section(findings):
             s = f"{x['precision']}: {x['tok_s']/r['tok_s']:.2f}x throughput vs fp32"
             if "perplexity" in agg and x.get("perplexity") == x.get("perplexity") and r.get("perplexity") == r.get("perplexity"):
                 s += f", perplexity {_fmt(x['perplexity'],3)} vs {_fmt(r['perplexity'],3)}"
-            if "greedy_token_agreement" in agg and x.get("greedy_token_agreement") == x.get("greedy_token_agreement"):
-                s += f", {100*x['greedy_token_agreement']:.0f}% greedy-token agreement"
+            if "greedy_prefix_match" in agg and x.get("greedy_prefix_match") == x.get("greedy_prefix_match"):
+                s += f", greedy outputs match fp32 for the first {100*x['greedy_prefix_match']:.0f}% of tokens on average"
             findings.append(s + ".")
+    note = ""
+    if q is not None and "eval_text" in q and q["eval_text"].astype(str).str.contains("NOT wikitext|fallback", case=False).any():
+        findings.append("WARNING: perplexity was measured on a built-in repeated paragraph, not WikiText-2; "
+                        "values are only comparable between rows of this table.")
+        note = "\n*Perplexity here uses fallback text (WikiText-2 was unavailable); compare rows only with each other.*\n"
     show = agg.drop(columns=["precision"]).round(3)
-    return "### Precision / quantization trade-off\n\n![precision](figures/precision.png)\n\n" + md_table(show, 3) + "\n"
+    return ("### Precision / quantization trade-off\n\n![precision](figures/precision.png)\n\n"
+            + md_table(show, 3) + "\n" + note)
+
+
+def ablation_section(findings):
+    df = _read("ablation_logits.csv")
+    if df is None:
+        return ""
+    cl = df[df["kind"] == "closed_loop"]
+    ol = df[df["kind"] == "open_loop"]
+    fig, ax = plt.subplots(1, 3, figsize=(15, 4.2))
+    for variant, color in (("full-logits", "#8c8c8c"), ("last-logits", "#2a7fbf")):
+        g = ol[ol["variant"] == variant].sort_values("offered_rps")
+        ax[0].plot(g["offered_rps"], g["output_tok_per_s"], marker="o", label=variant, color=color)
+        ax[1].plot(g["offered_rps"], g["ttft_p95"], marker="o", label=variant, color=color)
+    m = cl.groupby("variant")[["output_tok_per_s", "prefill_time_share"]].mean()
+    if len(m):
+        ax[2].bar(m.index, m["output_tok_per_s"], color=["#8c8c8c" if v == "full-logits" else "#2a7fbf" for v in m.index])
+    ax[1].set_yscale("log")
+    _style(ax[0], "offered load (req/s)", "output tokens/s", "Open-loop throughput")
+    _style(ax[1], "offered load (req/s)", "p95 TTFT (s, log)", "Tail TTFT")
+    _style(ax[2], "", "output tokens/s", "Closed-loop peak (same concurrency)")
+    ax[0].legend(frameon=False, fontsize=8)
+    plt.tight_layout()
+    plt.savefig(FIGS / "ablation_logits.png", dpi=150)
+    plt.close()
+    if {"full-logits", "last-logits"} <= set(m.index):
+        a, b = m.loc["full-logits"], m.loc["last-logits"]
+        ratio = b["output_tok_per_s"] / a["output_tok_per_s"]
+        verb = ("raises" if ratio >= 1.03 else "lowers" if ratio <= 0.97 else "does not measurably change")
+        findings.append(f"Computing the lm_head only for the last prompt position {verb} closed-loop throughput "
+                        f"({a['output_tok_per_s']:.0f} -> {b['output_tok_per_s']:.0f} tok/s, {ratio:.2f}x; "
+                        f"run-to-run spread is not shown, so treat differences under ~5% as noise) "
+                        f"and moves the share of GPU time spent in prefill from {100*a['prefill_time_share']:.0f}% to "
+                        f"{100*b['prefill_time_share']:.0f}%.")
+    show = m.reset_index().rename(columns={"output_tok_per_s": "closed-loop tok/s", "prefill_time_share": "prefill time share"})
+    return ("### Optimisation ablation: last-position logits in prefill\n\n![ablation](figures/ablation_logits.png)\n\n"
+            + md_table(show, 3) + "\n")
 
 
 def build():
@@ -268,7 +330,7 @@ def build():
     env = PROC / "environment.json"
     envd = json.loads(env.read_text()) if env.exists() else {}
     sections = []
-    for fn in (scheduler_section, concurrency_section, microbench_section, precision_section):
+    for fn in (scheduler_section, concurrency_section, microbench_section, ablation_section, precision_section):
         try:
             sections.append(fn(findings))
         except Exception as exc:  # a missing experiment must not break the report
@@ -286,7 +348,7 @@ def build():
         txt = readme.read_text(encoding="utf-8")
         compact = (head + "\n" + fnd + "\n" +
                    "".join(f"![{n}](reports/figures/{n}.png)\n\n" for n in
-                           ("scheduler_open_loop", "concurrency_closed_loop", "microbench", "precision")
+                           ("scheduler_open_loop", "concurrency_closed_loop", "microbench", "ablation_logits", "precision")
                            if (FIGS / f"{n}.png").exists()) +
                    "Full tables and methodology: [reports/RESULTS.md](reports/RESULTS.md).\n")
         if START in txt and END in txt:

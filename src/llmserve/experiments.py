@@ -37,6 +37,9 @@ PROFILES = {
         conc_configs={"sequential": dict(mode="sequential", levels=[1, 4]),
                       "continuous-8": dict(mode="continuous", max_batch=8, levels=[1, 4, 8])},
         conc_reps=2, workload="mixed",
+        conc_extra={"continuous-16": dict(mode="continuous", max_batch=16, levels=[2])},
+        refine_rates={"continuous-8": [4]}, vllm_extra_rates=[],
+        ablation=dict(rates=[2, 6], conc=4, reps=2),
         precision=[("float32", "none"), ("float16", "none")], prec_conc=4, prec_requests=12,
         quality_configs=[("float32", "none")],
         vllm=None,
@@ -46,21 +49,26 @@ PROFILES = {
         slo_ttft=1.0, slo_tpot=0.1, window_s=25, drain_s=45, min_req=12,
         sched_configs={
             "sequential": dict(mode="sequential", rates=[0.1, 0.2, 0.4, 0.8]),
-            "static-16": dict(mode="static", max_batch=16, rates=[0.25, 0.5, 1, 2, 4, 8]),
-            "continuous-16": dict(mode="continuous", max_batch=16, rates=[0.5, 1, 2, 4, 8, 12]),
-            "continuous-32": dict(mode="continuous", max_batch=32, rates=[0.5, 1, 2, 4, 8, 12]),
+            "static-16": dict(mode="static", max_batch=16, rates=[0.25, 0.5, 1, 2, 3, 4, 8]),
+            "continuous-16": dict(mode="continuous", max_batch=16, rates=[0.5, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12]),
+            "continuous-32": dict(mode="continuous", max_batch=32, rates=[0.5, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12]),
         },
         conc_configs={
-            "sequential": dict(mode="sequential", levels=[1, 2, 4, 8]),
+            "sequential": dict(mode="sequential", levels=[1, 4]),
             "static-16": dict(mode="static", max_batch=16, levels=[1, 2, 4, 8, 16]),
             "continuous-16": dict(mode="continuous", max_batch=16, levels=[1, 2, 4, 8, 16, 32]),
+            "continuous-32": dict(mode="continuous", max_batch=32, levels=[8, 16, 32, 64]),
         },
         conc_reps=3, workload="mixed",
+        # optional patch-up experiments (used when extending an earlier run); empty in a full run
+        conc_extra={}, refine_rates={}, vllm_extra_rates=[],
+        # prefill optimisation ablation: full-vocab logits at every prompt position vs last position only
+        ablation=dict(rates=[2, 4, 6, 8], conc=16, reps=3),
         precision=[("float32", "none"), ("float16", "none"), ("float16", "int8"), ("float16", "nf4")],
         prec_conc=16, prec_requests=64,
         quality_configs=[("float32", "none"), ("float16", "none"), ("float16", "int8"), ("float16", "nf4")],
-        vllm=dict(port=8001, max_num_seqs=16, venv="/content/vllm-env", rates=[0.5, 1, 2, 4, 8, 12],
-                  levels=[1, 2, 4, 8, 16, 32]),
+        vllm=dict(port=8001, max_num_seqs=16, venv="/content/vllm-env",
+                  rates=[0.5, 1, 2, 4, 8, 12, 16, 24, 32], levels=[1, 2, 4, 8, 16, 32]),
     ),
 }
 
@@ -124,6 +132,7 @@ class Server:
 
 def _save_records(name, records):
     RAW.mkdir(parents=True, exist_ok=True)
+    name = name.replace("/", "_")
     pd.DataFrame([r.__dict__ | {"tpot": r.tpot} for r in records]).to_csv(RAW / f"{name}.csv", index=False)
 
 
@@ -132,6 +141,16 @@ def _append(path, rows):
     df = pd.DataFrame(rows)
     df.to_csv(path, index=False)
     return df
+
+
+def _merge_save(path, new_rows, keys):
+    """Merge new rows into an existing CSV (new rows win on duplicate keys)."""
+    new = pd.DataFrame(new_rows)
+    if Path(path).exists() and Path(path).stat().st_size > 0:
+        new = pd.concat([pd.read_csv(path), new], ignore_index=True)
+    new = new.drop_duplicates(subset=keys, keep="last").sort_values(keys).reset_index(drop=True)
+    new.to_csv(path, index=False)
+    return new
 
 
 def _open_loop_sweep(prof, srv, cfg_name, model_name, rates, tag, seed0=0):
@@ -253,18 +272,17 @@ def exp_quality(prof):
     print(df.round(4).to_string(index=False))
 
 
-def exp_vllm(prof):
-    """Baseline: the same load against vLLM serving the same model (best effort, separate venv)."""
+def _vllm_up(prof):
+    """Start vLLM (best effort). Returns (proc, url) or None."""
     cfg = prof.get("vllm")
     if not cfg:
         print("no vllm config for this profile; skipping")
-        return
+        return None
     py = Path(cfg["venv"]) / "bin" / "python"
     if not py.exists():
         print(f"vLLM venv not found at {cfg['venv']} (run the install cell first); skipping")
-        return
+        return None
     base = f"http://127.0.0.1:{cfg['port']}"
-    url = f"{base}/v1/chat/completions"
     cmd = [str(py), "-m", "vllm.entrypoints.openai.api_server", "--model", prof["model"],
            "--dtype", "half", "--max-model-len", "4096", "--max-num-seqs", str(cfg["max_num_seqs"]),
            "--gpu-memory-utilization", "0.45", "--port", str(cfg["port"])]
@@ -278,18 +296,45 @@ def exp_vllm(prof):
         try:
             _wait_healthy(f"{base}/health", proc, log, timeout=420)
             print(f"vLLM up (attention backend: {backend or 'default'})", flush=True)
-            break
+            url = f"{base}/v1/chat/completions"
+            asyncio.run(warmup(url, prof["model"]))
+            return proc, url
         except Exception as exc:
             print(f"vLLM attempt with backend={backend or 'default'} failed: {str(exc)[-500:]}", flush=True)
             proc.terminate()
             time.sleep(3)
-    else:
-        print("vLLM could not be started on this GPU; the report will omit the baseline.")
-        return
+    print("vLLM could not be started on this GPU; the report will omit the baseline.")
+    return None
+
+
+def _vllm_down(proc):
+    proc.terminate()
     try:
-        asyncio.run(warmup(url, prof["model"]))
-        rows = _open_loop_sweep(prof, type("S", (), {"url": url, "engine_stats": lambda self, reset=True: {}})(),
-                                "vllm", prof["model"], cfg["rates"], "sched")
+        proc.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+    time.sleep(3)
+
+
+class _Remote:
+    """Stand-in for Server when the target is an external OpenAI-compatible server."""
+
+    def __init__(self, url):
+        self.url = url
+
+    def engine_stats(self, reset=True):
+        return {}
+
+
+def exp_vllm(prof):
+    """Baseline: the same load against vLLM serving the same model (best effort, separate venv)."""
+    up = _vllm_up(prof)
+    if not up:
+        return
+    proc, url = up
+    cfg = prof["vllm"]
+    try:
+        rows = _open_loop_sweep(prof, _Remote(url), "vllm", prof["model"], cfg["rates"], "sched")
         _append(PROC / "vllm_open_loop.csv", rows)
         crow = []
         for c in cfg["levels"]:
@@ -303,16 +348,86 @@ def exp_vllm(prof):
                   flush=True)
         _append(PROC / "vllm_closed_loop.csv", crow)
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=30)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        _vllm_down(proc)
+
+
+def exp_conc_extra(prof):
+    """Closed-loop sweep for configs that were not in the first run; merged into the existing CSV."""
+    rows = []
+    for name, cfg in prof.get("conc_extra", {}).items():
+        print(f"== concurrency (extra): {name}", flush=True)
+        with Server(prof, name, cfg["mode"], cfg.get("max_batch", 16)) as srv:
+            for c in cfg["levels"]:
+                for rep in range(prof["conc_reps"]):
+                    srv.engine_stats(reset=True)
+                    records, summ = asyncio.run(run_closed_loop(
+                        srv.url, prof["model"], c, max(16, 4 * c), workload=prof["workload"], seed=100 + rep,
+                        slo_ttft=prof["slo_ttft"], slo_tpot=prof["slo_tpot"]))
+                    summ.update(srv.engine_stats(reset=True))
+                    summ.update(config=name, concurrency=c, rep=rep, workload=prof["workload"])
+                    rows.append(summ)
+                    _save_records(f"conc-{name}-c{c}-rep{rep}", records)
+                last = [r for r in rows if r["config"] == name and r["concurrency"] == c]
+                print(f"  [{name}] c={c:>3}: tok/s={sum(r['output_tok_per_s'] for r in last)/len(last):.1f}", flush=True)
+    if rows:
+        _merge_save(PROC / "concurrency_closed_loop.csv", rows, ["config", "concurrency", "rep"])
+
+
+def exp_refine(prof):
+    """Add rates to the open-loop grid: finer steps near each engine's knee, and higher rates for vLLM."""
+    for name, rates in prof.get("refine_rates", {}).items():
+        cfg = prof["sched_configs"].get(name)
+        if not cfg:
+            continue
+        print(f"== refine: {name} at {rates}", flush=True)
+        with Server(prof, name, cfg["mode"], cfg.get("max_batch", 16)) as srv:
+            rows = _open_loop_sweep(prof, srv, name, prof["model"], rates, "sched", seed0=500)
+        _merge_save(PROC / "scheduler_open_loop.csv", rows, ["config", "offered_rps"])
+    extra = prof.get("vllm_extra_rates")
+    if extra:
+        up = _vllm_up(prof)
+        if up:
+            proc, url = up
+            try:
+                rows = _open_loop_sweep(prof, _Remote(url), "vllm", prof["model"], extra, "sched", seed0=500)
+                _merge_save(PROC / "vllm_open_loop.csv", rows, ["config", "offered_rps"])
+            finally:
+                _vllm_down(proc)
+
+
+def exp_ablation(prof):
+    """Prefill optimisation: compute lm_head only for the last prompt position (vs every position).
+
+    Same server, same load, same session; the only difference is the --full-logits flag.
+    """
+    ab = prof.get("ablation")
+    if not ab:
+        return
+    rows = []
+    for variant, extra in (("full-logits", ("--full-logits",)), ("last-logits", ())):
+        print(f"== ablation: {variant}", flush=True)
+        with Server(prof, f"abl-{variant}", "continuous", 16, extra=extra) as srv:
+            for r in _open_loop_sweep(prof, srv, f"continuous-16/{variant}", prof["model"], ab["rates"], "abl", seed0=700):
+                r.update(variant=variant, kind="open_loop")
+                rows.append(r)
+            for rep in range(ab["reps"]):
+                srv.engine_stats(reset=True)
+                records, summ = asyncio.run(run_closed_loop(
+                    srv.url, prof["model"], ab["conc"], max(32, 4 * ab["conc"]), workload=prof["workload"],
+                    seed=300 + rep, slo_ttft=prof["slo_ttft"], slo_tpot=prof["slo_tpot"]))
+                summ.update(srv.engine_stats(reset=True))
+                summ.update(config=f"continuous-16/{variant}", variant=variant, kind="closed_loop",
+                            concurrency=ab["conc"], rep=rep)
+                rows.append(summ)
+            cl = [r for r in rows if r["variant"] == variant and r["kind"] == "closed_loop"]
+            print(f"  closed-loop c={ab['conc']}: tok/s={sum(r['output_tok_per_s'] for r in cl)/len(cl):.1f}", flush=True)
+    _append(PROC / "ablation_logits.csv", rows)
 
 
 EXPERIMENTS = {"env": exp_env, "scheduler": exp_scheduler, "concurrency": exp_concurrency,
                "microbench": exp_microbench, "precision": exp_precision, "quality": exp_quality,
-               "vllm": exp_vllm}
+               "vllm": exp_vllm, "conc_extra": exp_conc_extra, "refine": exp_refine,
+               "ablation": exp_ablation}
 
 
 def main():

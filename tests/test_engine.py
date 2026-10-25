@@ -112,3 +112,19 @@ def test_background_thread_serves_requests():
     assert eng.completed == len(reqs)
     for r in reqs:
         assert r.out_ids == reference_greedy(model, r.prompt_ids, r.max_new_tokens)
+
+
+def test_last_logits_prefill_matches_full_logits():
+    from llmserve.engine import forward_last_logits
+
+    model = build_tiny_model().double()
+    ids = torch.tensor([[5, 9, 11, 40, 7, 3]])
+    with torch.no_grad():
+        full = model(input_ids=ids, use_cache=True).logits[0, -1]
+        last = forward_last_logits(model, ids, use_cache=True).logits[0, -1]
+    assert torch.allclose(full, last)
+    for flag in (True, False):
+        reqs = make_requests(seed=9, n=6)
+        run(model, reqs, max_batch=4, policy="continuous", last_logits_only=flag)
+        for r in reqs:
+            assert r.out_ids == reference_greedy(model, r.prompt_ids, r.max_new_tokens)

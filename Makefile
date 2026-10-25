@@ -9,7 +9,7 @@ smoke:   # whole pipeline on CPU with a tiny random model (~3 min)
 	python -m llmserve.report
 
 t4:      # the real experiments (GPU)
-	python -m llmserve.experiments --profile t4 --only env microbench scheduler concurrency precision quality
+	python -m llmserve.experiments --profile t4 --only env microbench scheduler concurrency ablation precision quality
 	python -m llmserve.report
 
 .PHONY: install test smoke t4

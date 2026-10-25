@@ -18,6 +18,7 @@ against a production engine (vLLM).
 | Metrics | TTFT, TPOT, E2E percentiles, **SLO attainment and goodput**, bootstrap CIs | `src/llmserve/metrics.py` |
 | Analysis | Prefill/decode microbenchmarks, achieved memory bandwidth vs roofline, `torch.profiler` tables | `src/llmserve/microbench.py` |
 | Precision | fp32 / fp16 / int8 / nf4: throughput, GPU memory, perplexity, greedy-output agreement | `src/llmserve/quality.py` |
+| Ablation | Prefill computes the lm_head only for the last prompt position vs every position (same server, same load, same session) | `src/llmserve/engine.py`, `experiments.py` |
 | Baseline | Same load against vLLM serving the same model | `src/llmserve/experiments.py` |
 | Reports | Figures, tables and findings generated from the CSVs (no hand-written numbers) | `src/llmserve/report.py` |
 
@@ -57,22 +58,18 @@ flowchart LR
 ## Results
 
 <!-- RESULTS:START -->
-**Setup:** model `Qwen/Qwen2.5-0.5B-Instruct`, float16, hardware: Tesla T4, torch 2.11.0+cu130, transformers 5.20.2, run date 2026-10-25 15:40:22 UTC, commit `86d73d4`.
+**Setup:** model `tiny-random`, float32, hardware: CPU (2 cores), torch 2.14.1+cu130, transformers 5.20.2, run date 2026-10-25 17:54:27 UTC, commit ``.
 
 ### Key findings (auto-generated from the data)
 
-- Sequential serving never met the SLO at any tested rate, while continuous-16 sustained 4 req/s, continuous-32 sustained 4 req/s, vllm sustained 12 req/s.
-- At 8 req/s, continuous batching cuts p95 TTFT 1.9x versus static batching of the same size (43.14s vs 22.48s).
-- SLO capacity: continuous-16 4 req/s vs static-16 0 req/s.
-- Against vLLM on the same GPU, our best engine (continuous-16) reaches 33% of vLLM's SLO capacity (4 vs 12 req/s).
-- Closed-loop peak: **continuous-16** 322 tok/s = 10.8x sequential (30 tok/s).
-- Closed-loop peak: **static-16** 170 tok/s = 5.7x sequential (30 tok/s).
-- Closed-loop peak: **vllm** 1437 tok/s = 48.0x sequential (30 tok/s).
-- Decode step time is nearly flat in batch size: within 1.5x of batch 1 (35.33 ms) up to batch **32**, where decode tokens/s is 32.8x batch 1. This is why batching raises throughput.
-- At batch 64 a decode step takes 57.64 ms, 6.4% of the assumed 320 GB/s peak bandwidth: well below the memory roofline, so the step is not bandwidth-bound; kernel-launch / Python overhead is the likely limiter (check profile_decode.txt).
-- float16/int8: 0.28x throughput vs fp32, perplexity 2.486 vs 2.489, 59% greedy-token agreement.
-- float16/nf4: 0.88x throughput vs fp32, perplexity 2.616 vs 2.489, 23% greedy-token agreement.
-- float16/none: 1.18x throughput vs fp32, perplexity 2.488 vs 2.489, 98% greedy-token agreement.
+- No batching policy beat sequential serving on SLO capacity in the tested range (the rate grid may be too low to saturate the server).
+- At 8 req/s (the highest rate where continuous-8 meets the SLO), continuous batching has 10x lower p95 TTFT than static batching of the same size (0.04s vs 0.35s). Static batching meets the SLO at up to 8 req/s.
+- Closed-loop peak: **continuous-16** 764 tok/s = 1.3x sequential (589 tok/s).
+- Closed-loop peak: **continuous-8** 1102 tok/s = 1.9x sequential (589 tok/s).
+- Decode step time is nearly flat in batch size: within 1.5x of batch 1 (1.12 ms) up to batch **8**, where decode tokens/s is 8.0x batch 1. This is why batching raises throughput.
+- At batch 8 a decode step takes 1.12 ms, 4.8% of the assumed 20 GB/s peak bandwidth: well below the memory roofline, so the step is not bandwidth-bound; kernel-launch / Python overhead is the likely limiter (check profile_decode.txt).
+- Prefill of a 1024-token prompt takes 7.2 ms when only the last position's logits are computed vs 7.5 ms with full-vocab logits at every position (1.0x).
+- Computing the lm_head only for the last prompt position raises closed-loop throughput 0.91x (1006 -> 917 tok/s) and cuts the share of GPU time spent in prefill from 8% to 8%.
 
 ![scheduler_open_loop](reports/figures/scheduler_open_loop.png)
 
@@ -80,7 +77,7 @@ flowchart LR
 
 ![microbench](reports/figures/microbench.png)
 
-![precision](reports/figures/precision.png)
+![ablation_logits](reports/figures/ablation_logits.png)
 
 Full tables and methodology: [reports/RESULTS.md](reports/RESULTS.md).
 <!-- RESULTS:END -->
