@@ -1,0 +1,5 @@
+engine,SLO capacity (req/s),seeds per rate,p95 TTFT at capacity (s),peak open-loop tok/s,closed-loop peak tok/s
+dynamic-32,"4 (in [4, 6))",2,0.14 ± 0.01,448 ± 6,"414 ± 13 (c=32, n=3)"
+slot-32,"4 (in [4, 6))",2,0.11 ± 0.01,529 ± 5,"477 ± 11 (c=32, n=3)"
+slot-graph-32,"10 (in [10, 12))",2,0.69 ± 0.15,1029 ± 87,"964 ± 14 (c=32, n=3)"
+vllm (baseline),"12 (in [12, 16))",1,n/a,n/a,1399

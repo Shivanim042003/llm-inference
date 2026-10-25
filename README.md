@@ -90,7 +90,54 @@ merged text (tested).
 ## Results
 
 <!-- RESULTS:START -->
-_Run the experiments and `python -m llmserve.report` to fill this block._
+**Setup:** model `Qwen/Qwen2.5-0.5B-Instruct`, float16, hardware: Tesla T4, torch 2.11.0+cu130, transformers 5.20.2, run date 2026-10-25 20:43:23 UTC, commit `b441375`.
+
+### Key findings (auto-generated from the data)
+
+- Sequential serving never met the SLO at any tested rate, while continuous-16 sustained 3 req/s, continuous-32 sustained 6 req/s, vllm sustained 12 req/s.
+- At 3 req/s (the highest rate where continuous-16 meets the SLO), continuous batching has 195x lower p95 TTFT than static batching of the same size (0.12s vs 22.66s). Static batching meets the SLO at no tested rate.
+- Against vLLM on the same GPU, our best engine (continuous-32, SLO capacity 6 req/s) reaches 50% of vLLM's SLO capacity (12 req/s).
+- Closed-loop peak: **continuous-16** 303 tok/s = 11.7x sequential (26 tok/s).
+- Closed-loop peak: **continuous-32** 469 tok/s = 18.2x sequential (26 tok/s).
+- Closed-loop peak: **static-16** 161 tok/s = 6.3x sequential (26 tok/s).
+- Closed-loop peak: **vllm** 1399 tok/s = 54.3x sequential (26 tok/s).
+- Decode step time is nearly flat in batch size: within 1.5x of batch 1 (77.70 ms) up to batch **128**, where decode tokens/s is 89.0x batch 1. This is why batching raises throughput.
+- At batch 128 a decode step takes 111.73 ms, 3.9% of the assumed 320 GB/s peak bandwidth: well below the memory roofline, so the step is not bandwidth-bound; kernel-launch / Python overhead is the likely limiter (check profile_decode.txt).
+- Prefill of a 2048-token prompt takes 417.7 ms when only the last position's logits are computed vs 435.1 ms with full-vocab logits at every position (1.0x).
+- Computing the lm_head only for the last prompt position raises closed-loop throughput (260 -> 268 tok/s, 1.03x; run-to-run spread is not shown, so treat differences under ~5% as noise) and moves the share of GPU time spent in prefill from 12% to 12%.
+- float16/int8: 0.26x throughput vs fp32, perplexity 22.455 vs 22.426, greedy outputs match fp32 for the first 58% of tokens on average.
+- float16/nf4: 0.81x throughput vs fp32, perplexity 25.025 vs 22.426, greedy outputs match fp32 for the first 17% of tokens on average.
+- float16/none: 1.08x throughput vs fp32, perplexity 22.417 vs 22.426, greedy outputs match fp32 for the first 98% of tokens on average.
+- Decode step time (kernel only, no scheduler): CUDA-graph slots are 3.6x-4.6x faster than the HF dynamic-cache step across batch sizes 1-32; the gain shrinks as batch grows because compute, not launch overhead, starts to dominate.
+- Static slots + CUDA graphs move SLO capacity from 4 (in [4, 6)) to 10 (in [10, 12)) req/s on the same model, GPU and load (2.50x by the lower bound). Every rate was run with 2 seed(s); a rate counts as meeting the SLO only if every seed does.
+- Of the end-to-end gain, CUDA graphs account for 2.02x closed-loop throughput on top of the static-slot engine (477 -> 964 tok/s); the static KV layout alone is the remainder.
+- Closed-loop peak throughput: 414 -> 964 tok/s (2.33x); the difference is outside one standard deviation of the repeats.
+- Against vLLM on the same GPU, slot+graphs reach 83% of its SLO capacity by lower bounds (10 vs 12 req/s) and 69% of its closed-loop throughput.
+- Chunked prefill (chunk-256) on a workload with ~12% long (~1.3k-token) prompts changes p95 TPOT by 1.01x and p95 TTFT by 1.33x relative to whole-prompt prefill (mean over 4 rates; <1 is better).
+- Prefix caching on a workload where every prompt shares a ~250-token preamble: mean prefix-token hit rate 92%, p95 TTFT 0.65x-0.84x of the uncached engine across rates (<1 is better; rates beyond saturation are dominated by queueing).
+- On the larger second model the slot+graph engine reaches 391 tok/s vs 223 for the dynamic-cache engine at their best concurrency (1.75x), so the ranking holds across model sizes.
+
+![engines](reports/figures/engines.png)
+
+![decode_graphs](reports/figures/decode_graphs.png)
+
+![scheduler_open_loop](reports/figures/scheduler_open_loop.png)
+
+![concurrency_closed_loop](reports/figures/concurrency_closed_loop.png)
+
+![microbench](reports/figures/microbench.png)
+
+![chunked_prefill](reports/figures/chunked_prefill.png)
+
+![prefix_cache](reports/figures/prefix_cache.png)
+
+![scale_model](reports/figures/scale_model.png)
+
+![ablation_logits](reports/figures/ablation_logits.png)
+
+![precision](reports/figures/precision.png)
+
+Full tables and methodology: [reports/RESULTS.md](reports/RESULTS.md).
 <!-- RESULTS:END -->
 
 ## Reproduce
