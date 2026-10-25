@@ -40,6 +40,7 @@ class RequestRecord:
     prompt_tokens: int = 0
     output_tokens: int = 0
     error: str = ""
+    engine_ttft: Optional[float] = None   # server-side time from submit to first generated token (if reported)
 
     @property
     def tpot(self) -> Optional[float]:
@@ -68,11 +69,14 @@ def summarize(records: List[RequestRecord], wall_s: float, offered_rps: Optional
         "ttft_p50": percentile([r.ttft for r in ok], 50),
         "ttft_p95": percentile([r.ttft for r in ok], 95),
         "ttft_p99": percentile([r.ttft for r in ok], 99),
+        "engine_ttft_p50": percentile([r.engine_ttft for r in ok], 50),
+        "engine_ttft_p95": percentile([r.engine_ttft for r in ok], 95),
         "tpot_p50": percentile(tpots, 50),
         "tpot_p95": percentile(tpots, 95),
         "e2e_p50": percentile([r.e2e for r in ok], 50),
         "e2e_p95": percentile([r.e2e for r in ok], 95),
         "e2e_p99": percentile([r.e2e for r in ok], 99),
+        "ttft_definition": "first_non_empty_content_chunk",
         "slo_ttft_s": slo_ttft,
         "slo_tpot_s": slo_tpot,
         "slo_attainment": len(meets) / n if n else 0.0,

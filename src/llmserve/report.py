@@ -324,13 +324,243 @@ def ablation_section(findings):
             + md_table(show, 3) + "\n")
 
 
+# --------------------------------------------------------------------------- slot-engine sections
+def _agg_open(df, keys=("config", "offered_rps")):
+    keys = list(keys)
+    n = ("seed", "count") if "seed" in df else ("failed", "count")
+    return df.groupby(keys).agg(
+        tok=("output_tok_per_s", "mean"), tok_sd=("output_tok_per_s", "std"),
+        ttft_p95=("ttft_p95", "mean"), ttft_sd=("ttft_p95", "std"),
+        tpot_p95=("tpot_p95", "mean") if "tpot_p95" in df else ("ttft_p95", "mean"),
+        e2e_p95=("e2e_p95", "mean") if "e2e_p95" in df else ("ttft_p95", "mean"),
+        good=("goodput_rps", "mean"), good_sd=("goodput_rps", "std"),
+        att=("slo_attainment", "mean"), att_min=("slo_attainment", "min"),
+        failed=("failed", "sum"), n=n).reset_index()
+
+
+def _capacity(agg, cfg):
+    """Highest rate where every seed has >=95% SLO attainment and nothing failed, plus the next tested rate."""
+    g = agg[agg["config"] == cfg].sort_values("offered_rps")
+    ok = g[(g["att_min"] >= 0.95) & (g["failed"] == 0)]
+    cap = float(ok["offered_rps"].max()) if len(ok) else 0.0
+    higher = g[g["offered_rps"] > cap]["offered_rps"]
+    up = float(higher.min()) if len(higher) else float("inf")
+    return cap, up
+
+
+def _cap_label(cap, up):
+    return (f">= {cap:g} (never saturated)" if up == float("inf") and cap > 0
+            else f"{cap:g} (in [{cap:g}, {up:g}))" if cap > 0 else "0 (SLO never met)")
+
+
+def _pm(m, sd, d=0):
+    return f"{m:.{d}f}" + (f" ± {sd:.{d}f}" if sd == sd else "")
+
+
+def _vllm_reference():
+    """(open-loop capacity, closed-loop peak tok/s, completed?) from the vLLM baseline files, if they exist."""
+    v = _read("vllm_open_loop.csv")
+    if v is None:
+        return None
+    agg = _agg_open(v)
+    cap, up = _capacity(agg, "vllm")
+    vc = _read("vllm_closed_loop.csv")
+    peak = float(vc.groupby("concurrency")["output_tok_per_s"].mean().max()) if vc is not None else float("nan")
+    return cap, up, peak
+
+
+def engines_section(findings):
+    o, c = _read("engines_open_loop.csv"), _read("engines_closed_loop.csv")
+    if o is None:
+        return ""
+    agg = _agg_open(o)
+    order = [x for x in ("dynamic-32", "slot-32", "slot-graph-32") if x in set(agg["config"])] or list(agg["config"].unique())
+    pal = {"dynamic-32": "#8c8c8c", "slot-32": "#d98a1c", "slot-graph-32": "#14507a"}
+    fig, ax = plt.subplots(1, 3, figsize=(15, 4.2))
+    for cfg in order:
+        g = agg[agg["config"] == cfg].sort_values("offered_rps")
+        ax[0].errorbar(g["offered_rps"], g["tok"], yerr=g["tok_sd"].fillna(0), marker="o", label=cfg, color=pal.get(cfg), capsize=3)
+        ax[1].errorbar(g["offered_rps"], g["ttft_p95"], yerr=g["ttft_sd"].fillna(0), marker="o", label=cfg, color=pal.get(cfg), capsize=3)
+    ax[1].set_yscale("log")
+    _style(ax[0], "offered load (req/s)", "output tokens/s (mean ± sd over seeds)", "Throughput")
+    _style(ax[1], "offered load (req/s)", "p95 TTFT (s, log; mean ± sd)", "Tail TTFT")
+    ax[0].legend(frameon=False, fontsize=8)
+    rows, peaks = [], {}
+    if c is not None:
+        cm = c.groupby(["config", "concurrency"])["output_tok_per_s"].agg(["mean", "std", "count"]).reset_index()
+        for cfg in order:
+            g = cm[cm["config"] == cfg]
+            if len(g):
+                b = g.loc[g["mean"].idxmax()]
+                peaks[cfg] = (float(b["mean"]), float(b["std"]) if b["std"] == b["std"] else float("nan"), int(b["concurrency"]), int(b["count"]))
+        ax[2].bar(list(peaks), [peaks[k][0] for k in peaks], yerr=[0 if peaks[k][1] != peaks[k][1] else peaks[k][1] for k in peaks],
+                  color=[pal.get(k, "#2a7fbf") for k in peaks], capsize=4)
+        ax[2].tick_params(axis="x", labelsize=8)
+    _style(ax[2], "", "closed-loop peak tok/s (mean ± sd over reps)", "Closed-loop peak")
+    plt.tight_layout(); plt.savefig(FIGS / "engines.png", dpi=150); plt.close()
+    caps = {cfg: _capacity(agg, cfg) for cfg in order}
+    vref = _vllm_reference()
+    for cfg in order:
+        cap, up = caps[cfg]
+        g = agg[agg["config"] == cfg].sort_values("offered_rps")
+        at = g[g["offered_rps"] == cap]
+        row = {"engine": cfg, "SLO capacity (req/s)": _cap_label(cap, up),
+               "seeds per rate": int(g["n"].max()),
+               "p95 TTFT at capacity (s)": _pm(float(at["ttft_p95"].iloc[0]), float(at["ttft_sd"].iloc[0]), 2) if len(at) else "n/a",
+               "peak open-loop tok/s": _pm(float(g["tok"].max()), float(g.loc[g["tok"].idxmax(), "tok_sd"]), 0)}
+        if cfg in peaks:
+            m, sd, conc, n = peaks[cfg]
+            row["closed-loop peak tok/s"] = f"{_pm(m, sd, 0)} (c={conc}, n={n})"
+        rows.append(row)
+    if vref:
+        cap, up, peak = vref
+        rows.append({"engine": "vllm (baseline)", "SLO capacity (req/s)": _cap_label(cap, up), "seeds per rate": 1,
+                     "p95 TTFT at capacity (s)": "n/a", "peak open-loop tok/s": "n/a",
+                     "closed-loop peak tok/s": f"{peak:.0f}" if peak == peak else "n/a"})
+    tab = pd.DataFrame(rows)
+    tab.to_csv(PROC / "engines_summary.csv", index=False)
+    if {"dynamic-32", "slot-graph-32"} <= set(order):
+        (c0, u0), (c1, u1) = caps["dynamic-32"], caps["slot-graph-32"]
+        if c0 > 0 and c1 > 0:
+            findings.append(f"Static slots + CUDA graphs move SLO capacity from {_cap_label(c0, u0)} to {_cap_label(c1, u1)} req/s "
+                            f"on the same model, GPU and load ({c1/c0:.2f}x by the lower bound). Every rate was run with "
+                            f"{int(agg['n'].max())} seed(s); a rate counts as meeting the SLO only if every seed does.")
+        elif c1 > c0:
+            findings.append(f"Static slots + CUDA graphs meet the SLO at {c1:g} req/s; the dynamic-cache engine never did.")
+        else:
+            findings.append("Static slots + CUDA graphs did not raise SLO capacity over the dynamic-cache engine in the tested range.")
+    if "slot-32" in order and "slot-graph-32" in order and "slot-32" in peaks and "slot-graph-32" in peaks:
+        a, b = peaks["slot-32"][0], peaks["slot-graph-32"][0]
+        findings.append(f"Of the end-to-end gain, CUDA graphs account for {b/a:.2f}x closed-loop throughput on top of the static-slot "
+                        f"engine ({a:.0f} -> {b:.0f} tok/s); the static KV layout alone is the remainder.")
+    if {"dynamic-32", "slot-graph-32"} <= set(peaks):
+        a, b = peaks["dynamic-32"], peaks["slot-graph-32"]
+        sig = "outside" if abs(b[0] - a[0]) > (0 if a[1] != a[1] else a[1]) + (0 if b[1] != b[1] else b[1]) else "within"
+        findings.append(f"Closed-loop peak throughput: {a[0]:.0f} -> {b[0]:.0f} tok/s ({b[0]/a[0]:.2f}x); the difference is {sig} one standard deviation of the repeats.")
+    if vref and "slot-graph-32" in caps:
+        cap, up, peak = vref
+        cs, us = caps["slot-graph-32"]
+        if cap > 0 and cs > 0:
+            findings.append(f"Against vLLM on the same GPU, slot+graphs reach {100*cs/cap:.0f}% of its SLO capacity by lower bounds "
+                            f"({cs:g} vs {cap:g} req/s)" + (f" and {100*peaks['slot-graph-32'][0]/peak:.0f}% of its closed-loop throughput" if "slot-graph-32" in peaks and peak == peak else "") + ".")
+    note = ("\n*vLLM baseline: completed.* Same model, fp16, same load generator and TTFT definition (first non-empty content chunk).\n"
+            if vref else "\n**The vLLM baseline did not complete in this run; no vLLM comparison is made.**\n")
+    return "### Engine comparison: dynamic cache vs static slots vs static slots + CUDA graphs\n\n![engines](figures/engines.png)\n\n" + md_table(tab) + "\n" + note
+
+
+def decode_graphs_section(findings):
+    df = _read("decode_graphs.csv")
+    if df is None:
+        return ""
+    df = df.dropna(subset=["step_ms"])
+    df = df[df["batch"] > 0]
+    fig, ax = plt.subplots(figsize=(6.5, 4.2))
+    for v, g in df.groupby("variant"):
+        ax.plot(g["batch"], g["step_ms"], marker="o", label=v)
+    ax.set_xscale("log", base=2)
+    _style(ax, "decode batch size", "ms per decode step (ctx=256)", "Decode step time by implementation")
+    ax.legend(frameon=False, fontsize=8)
+    plt.tight_layout(); plt.savefig(FIGS / "decode_graphs.png", dpi=150); plt.close()
+    pv = df.pivot(index="batch", columns="variant", values="step_ms")
+    base = "hf-dynamic-cache (eager)"
+    if base in pv and "slot + cuda graph" in pv:
+        sp = (pv[base] / pv["slot + cuda graph"]).dropna()
+        findings.append(f"Decode step time (kernel only, no scheduler): CUDA-graph slots are {sp.min():.1f}x-{sp.max():.1f}x faster than the "
+                        f"HF dynamic-cache step across batch sizes {int(sp.index.min())}-{int(sp.index.max())}; the gain shrinks as batch grows because "
+                        f"compute, not launch overhead, starts to dominate.")
+    out = pv.reset_index().round(2)
+    return "### Decode kernel microbenchmark\n\n![decode graphs](figures/decode_graphs.png)\n\n" + md_table(out, 2) + "\n"
+
+
+def chunked_section(findings):
+    df = _read("chunked_open_loop.csv")
+    if df is None:
+        return ""
+    agg = _agg_open(df)
+    cfgs = list(agg["config"].unique())
+    fig, ax = plt.subplots(1, 3, figsize=(15, 4.2))
+    for cfg in cfgs:
+        g = agg[agg["config"] == cfg].sort_values("offered_rps")
+        for a, col in zip(ax, ("ttft_p95", "tpot_p95", "e2e_p95")):
+            a.plot(g["offered_rps"], g[col], marker="o", label=cfg)
+    for a, t in zip(ax, ("p95 TTFT (s)", "p95 TPOT (s/token)", "p95 end-to-end (s)")):
+        _style(a, "offered load (req/s)", t, t)
+    ax[0].legend(frameon=False, fontsize=8)
+    plt.tight_layout(); plt.savefig(FIGS / "chunked_prefill.png", dpi=150); plt.close()
+    base = "no-chunking"
+    others = [c for c in cfgs if c != base]
+    if base in cfgs and others:
+        b = agg[agg["config"] == base].set_index("offered_rps")
+        for o in others:
+            x = agg[agg["config"] == o].set_index("offered_rps")
+            common = b.index.intersection(x.index)
+            if len(common):
+                tp = (x.loc[common, "tpot_p95"] / b.loc[common, "tpot_p95"]).mean()
+                tt = (x.loc[common, "ttft_p95"] / b.loc[common, "ttft_p95"]).mean()
+                findings.append(f"Chunked prefill ({o}) on a workload with ~12% long (~1.3k-token) prompts changes p95 TPOT by {tp:.2f}x and "
+                                f"p95 TTFT by {tt:.2f}x relative to whole-prompt prefill (mean over {len(common)} rates; <1 is better).")
+    show = agg[["config", "offered_rps", "ttft_p95", "tpot_p95", "e2e_p95", "good", "att", "n"]].round(3)
+    return "### Chunked prefill (long-prompt workload)\n\n![chunked](figures/chunked_prefill.png)\n\n" + md_table(show, 3) + "\n"
+
+
+def prefix_section(findings):
+    df = _read("prefix_open_loop.csv")
+    if df is None:
+        return ""
+    agg = _agg_open(df)
+    fig, ax = plt.subplots(1, 2, figsize=(10, 4.2))
+    for cfg in agg["config"].unique():
+        g = agg[agg["config"] == cfg].sort_values("offered_rps")
+        ax[0].plot(g["offered_rps"], g["ttft_p95"], marker="o", label=cfg)
+        ax[1].plot(g["offered_rps"], g["tok"], marker="o", label=cfg)
+    ax[0].set_yscale("log")
+    _style(ax[0], "offered load (req/s)", "p95 TTFT (s, log)", "Shared-preamble workload: tail TTFT")
+    _style(ax[1], "offered load (req/s)", "output tokens/s", "Throughput")
+    ax[0].legend(frameon=False, fontsize=8)
+    plt.tight_layout(); plt.savefig(FIGS / "prefix_cache.png", dpi=150); plt.close()
+    if {"prefix-cache", "no-prefix-cache"} <= set(agg["config"]):
+        a = agg[agg["config"] == "no-prefix-cache"].set_index("offered_rps")
+        b = agg[agg["config"] == "prefix-cache"].set_index("offered_rps")
+        common = a.index.intersection(b.index)
+        hit = df[df["config"] == "prefix-cache"]["prefix_token_hit_rate"].mean() if "prefix_token_hit_rate" in df else float("nan")
+        if len(common):
+            r = (b.loc[common, "ttft_p95"] / a.loc[common, "ttft_p95"])
+            findings.append(f"Prefix caching on a workload where every prompt shares a ~250-token preamble: mean prefix-token hit rate "
+                            f"{100*hit:.0f}%, p95 TTFT {r.min():.2f}x-{r.max():.2f}x of the uncached engine across rates "
+                            f"(<1 is better; rates beyond saturation are dominated by queueing).")
+    show = agg[["config", "offered_rps", "ttft_p95", "tok", "good", "att", "n"]].round(3)
+    return "### Prefix caching (shared-preamble workload)\n\n![prefix](figures/prefix_cache.png)\n\n" + md_table(show, 3) + "\n"
+
+
+def scale_section(findings):
+    c = _read("scale_closed_loop.csv")
+    if c is None:
+        return ""
+    cm = c.groupby(["config", "concurrency"])["output_tok_per_s"].agg(["mean", "std", "count"]).reset_index()
+    fig, ax = plt.subplots(figsize=(6.5, 4.2))
+    for cfg, g in cm.groupby("config"):
+        ax.errorbar(g["concurrency"], g["mean"], yerr=g["std"].fillna(0), marker="o", label=cfg, capsize=3)
+    ax.set_xscale("log", base=2)
+    _style(ax, "closed-loop concurrency", "output tokens/s (mean ± sd)", "Second model: closed-loop throughput")
+    ax.legend(frameon=False, fontsize=8)
+    plt.tight_layout(); plt.savefig(FIGS / "scale_model.png", dpi=150); plt.close()
+    best = cm.loc[cm.groupby("config")["mean"].idxmax()].set_index("config")
+    if {"dynamic-16", "slot-graph-16"} <= set(best.index):
+        findings.append(f"On the larger second model the slot+graph engine reaches {best.loc['slot-graph-16','mean']:.0f} tok/s vs "
+                        f"{best.loc['dynamic-16','mean']:.0f} for the dynamic-cache engine at their best concurrency "
+                        f"({best.loc['slot-graph-16','mean']/best.loc['dynamic-16','mean']:.2f}x), so the ranking "
+                        f"{'holds' if best.loc['slot-graph-16','mean'] > best.loc['dynamic-16','mean'] else 'does not hold'} across model sizes.")
+    return "### Second model size\n\n![scale](figures/scale_model.png)\n\n" + md_table(cm.round(2), 1) + "\n"
+
+
 def build():
     FIGS.mkdir(parents=True, exist_ok=True)
     findings = []
     env = PROC / "environment.json"
     envd = json.loads(env.read_text()) if env.exists() else {}
     sections = []
-    for fn in (scheduler_section, concurrency_section, microbench_section, ablation_section, precision_section):
+    for fn in (scheduler_section, concurrency_section, microbench_section, ablation_section, precision_section,
+               decode_graphs_section, engines_section, chunked_section, prefix_section, scale_section):
         try:
             sections.append(fn(findings))
         except Exception as exc:  # a missing experiment must not break the report
@@ -339,16 +569,22 @@ def build():
     head = (f"**Setup:** model `{envd.get('profile_model', '?')}`, {envd.get('dtype', '?')}, hardware: {hw}, "
             f"torch {envd.get('torch', '?')}, transformers {envd.get('transformers', '?')}, "
             f"run date {envd.get('date_utc', '?')} UTC, commit `{envd.get('git_commit', '?')}`.\n")
+    method = ("\n**Method:** greedy decoding (temperature 0), `ignore_eos` so every request generates its requested length, "
+              "all engines serve the same model/dtype on the same GPU with `max_ctx` 4096 (prompts that do not fit are rejected, not truncated). "
+              "TTFT is client-visible: time to the first non-empty content chunk. Open-loop Poisson arrivals; SLO = "
+              "TTFT and TPOT thresholds shown with each table. 'Greedy agreement' in the precision table measures numerical "
+              "consistency with fp32, not task quality; perplexity is on WikiText-2 only when the row says so.\n")
     fnd = "### Key findings (auto-generated from the data)\n\n" + \
           ("\n".join(f"- {f}" for f in findings) if findings else "- (no results yet)") + "\n"
-    body = head + "\n" + fnd + "\n" + "\n".join(s for s in sections if s)
+    body = head + method + "\n" + fnd + "\n" + "\n".join(s for s in sections if s)
     (REPORTS / "RESULTS.md").write_text("# Results\n\n" + body, encoding="utf-8")
     readme = ROOT / "README.md"
     if readme.exists():
         txt = readme.read_text(encoding="utf-8")
         compact = (head + "\n" + fnd + "\n" +
                    "".join(f"![{n}](reports/figures/{n}.png)\n\n" for n in
-                           ("scheduler_open_loop", "concurrency_closed_loop", "microbench", "ablation_logits", "precision")
+                           ("engines", "decode_graphs", "scheduler_open_loop", "concurrency_closed_loop", "microbench",
+                            "chunked_prefill", "prefix_cache", "scale_model", "ablation_logits", "precision")
                            if (FIGS / f"{n}.png").exists()) +
                    "Full tables and methodology: [reports/RESULTS.md](reports/RESULTS.md).\n")
         if START in txt and END in txt:

@@ -23,7 +23,14 @@ WORKLOADS = {
     # (prompt_words choices, output_token choices)
     "uniform": ([48], [64]),
     "mixed": ([16, 48, 128, 256], [16, 32, 64, 128, 256]),
+    # ~12% of prompts are ~1.3k tokens: long prefills that stall decoding unless prefill is chunked
+    "longmix": ([16, 16, 16, 32, 32, 48, 48, 1000], [64, 128]),
 }
+
+# "shared": every prompt starts with the same ~250-token system-style preamble (RAG / agent / few-shot pattern),
+# followed by a short unique question. This is the workload prefix caching targets.
+SHARED_PREFIX = "You are a careful assistant for a systems team. Background notes: " + " ".join(
+    random.Random(2024).choice(WORDS) for _ in range(200)) + "."
 
 
 def make_prompt(rnd: random.Random, n_words: int) -> str:
@@ -32,6 +39,9 @@ def make_prompt(rnd: random.Random, n_words: int) -> str:
 
 
 def sample_request(rnd: random.Random, workload: str):
+    if workload == "shared":
+        question = " ".join(rnd.choice(WORDS) for _ in range(rnd.choice([8, 16, 24])))
+        return f"{SHARED_PREFIX}\n\nQuestion: {question}", rnd.choice([32, 64])
     pw, ot = WORKLOADS[workload]
     return make_prompt(rnd, rnd.choice(pw)), rnd.choice(ot)
 
@@ -59,10 +69,17 @@ async def _one_request(client: httpx.AsyncClient, url: str, model: str, prompt: 
                 if data.get("usage"):
                     rec.prompt_tokens = data["usage"].get("prompt_tokens", 0)
                     rec.output_tokens = data["usage"].get("completion_tokens", 0)
+                if data.get("error"):
+                    rec.error = str(data["error"].get("type", "stream_error"))
+                    return rec
+                if data.get("usage") and data["usage"].get("engine_ttft_s") is not None:
+                    rec.engine_ttft = data["usage"]["engine_ttft_s"]
                 choices = data.get("choices") or []
                 if choices:
-                    delta = choices[0].get("delta", {})
-                    if delta.get("content") is not None or choices[0].get("finish_reason"):
+                    # Client-visible TTFT = first chunk that carries non-empty text. Role-only / empty-content
+                    # chunks (vLLM sends one first) and finish-only chunks are not generated text.
+                    text = choices[0].get("delta", {}).get("content")
+                    if text:
                         chunks += 1
                         if rec.ttft is None:
                             rec.ttft = time.perf_counter() - t0

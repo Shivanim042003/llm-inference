@@ -43,6 +43,13 @@ PROFILES = {
         precision=[("float32", "none"), ("float16", "none")], prec_conc=4, prec_requests=12,
         quality_configs=[("float32", "none")],
         vllm=None,
+        engines=dict(configs={"dynamic-8": dict(engine="dynamic", max_batch=8),
+                              "slot-8": dict(engine="slot", max_batch=8)},
+                     rates=[2, 6], seeds=[0, 1], levels=[4], reps=2),
+        decode_graphs=True,
+        chunked=dict(workload="longmix", rates=[1, 2], seeds=[0], chunks=[0, 128], max_batch=8),
+        prefix=dict(workload="shared", rates=[2, 6], seeds=[0], max_batch=8),
+        scale=None,
     ),
     "t4": dict(
         model="Qwen/Qwen2.5-0.5B-Instruct", dtype="float16", peak_bw_gbs=320.0, tiny=False,
@@ -69,6 +76,15 @@ PROFILES = {
         quality_configs=[("float32", "none"), ("float16", "none"), ("float16", "int8"), ("float16", "nf4")],
         vllm=dict(port=8001, max_num_seqs=16, venv="/content/vllm-env",
                   rates=[0.5, 1, 2, 4, 8, 12, 16, 24, 32], levels=[1, 2, 4, 8, 16, 32]),
+        # static-slot engine: same load, same session, same model; only the engine changes
+        engines=dict(configs={"dynamic-32": dict(engine="dynamic", max_batch=32),
+                              "slot-32": dict(engine="slot", max_batch=32),
+                              "slot-graph-32": dict(engine="slot", graphs=True, max_batch=32)},
+                     rates=[2, 4, 6, 8, 10, 12, 16], seeds=[0, 1], levels=[8, 32], reps=3),
+        decode_graphs=True,
+        chunked=dict(workload="longmix", rates=[0.5, 1, 2, 3], seeds=[0, 1], chunks=[0, 256], max_batch=32),
+        prefix=dict(workload="shared", rates=[2, 4, 8, 12, 16], seeds=[0, 1], max_batch=32),
+        scale=dict(model="Qwen/Qwen2.5-1.5B-Instruct", rates=[1, 2, 4, 6], levels=[1, 8, 16], reps=3, max_batch=16),
     ),
 }
 
@@ -95,7 +111,8 @@ class Server:
     def __init__(self, prof, name, mode, max_batch=16, dtype=None, quant="none", port=8000, extra=()):
         self.prof, self.name, self.port = prof, name, port
         self.args = ["--model", prof["model"], "--mode", mode, "--max-batch", str(max_batch),
-                     "--dtype", dtype or prof["dtype"], "--quant", quant, "--port", str(port), *extra]
+                     "--dtype", dtype or prof["dtype"], "--quant", quant, "--port", str(port),
+                     "--max-pending", "4096", *extra]   # benchmark: queue effectively unbounded so overload shows as latency, not 503s
         self.base = f"http://127.0.0.1:{port}"
         self.url = f"{self.base}/v1/chat/completions"
 
@@ -424,10 +441,148 @@ def exp_ablation(prof):
     _append(PROC / "ablation_logits.csv", rows)
 
 
+# ----------------------------------------------------------------------------- slot-engine experiments
+def _slot_args(cfg):
+    if cfg.get("engine", "dynamic") != "slot":
+        return []
+    a = ["--engine", "slot"]
+    if cfg.get("graphs"):
+        a.append("--cuda-graphs")
+    if cfg.get("chunk"):
+        a += ["--chunk-size", str(cfg["chunk"])]
+    if cfg.get("prefix"):
+        a.append("--prefix-cache")
+    return a
+
+
+def _require_graphs(srv, cfg):
+    """A 'graphs' configuration must really run with CUDA graphs; never silently measure the eager fallback."""
+    if not cfg.get("graphs"):
+        return
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return                      # CPU smoke run: graphs are a no-op by design
+    except Exception:
+        return
+    st = srv.stats()
+    if not st.get("cuda_graphs"):
+        raise RuntimeError(f"CUDA graph capture did not take effect ({st.get('graph_error')}); see {srv.log}")
+
+
+def _sweep_seeds(prof, srv, name, rates, seeds, tag):
+    rows = []
+    for seed in seeds:
+        for r in _open_loop_sweep(prof, srv, name, prof["model"], rates, f"{tag}-s{seed}", seed0=1000 + 100 * seed):
+            r["seed"] = seed
+            rows.append(r)
+    return rows
+
+
+def _closed_sweep(prof, srv, name, levels, reps, tag):
+    rows = []
+    for c in levels:
+        for rep in range(reps):
+            srv.engine_stats(reset=True)
+            records, summ = asyncio.run(run_closed_loop(
+                srv.url, prof["model"], c, max(16, 4 * c), workload=prof["workload"], seed=100 + rep,
+                slo_ttft=prof["slo_ttft"], slo_tpot=prof["slo_tpot"]))
+            summ.update(srv.engine_stats(reset=True))
+            summ.update(config=name, concurrency=c, rep=rep, workload=prof["workload"])
+            rows.append(summ)
+            _save_records(f"{tag}-{name}-c{c}-rep{rep}", records)
+        sel = [r["output_tok_per_s"] for r in rows if r["concurrency"] == c]
+        print(f"  [{name}] c={c:>3}: tok/s={sum(sel)/len(sel):.1f} (n={len(sel)})", flush=True)
+    return rows
+
+
+def exp_decode_graphs(prof):
+    """Decode-step time: HF dynamic cache vs static slots (eager) vs static slots + CUDA graph."""
+    if not prof.get("decode_graphs"):
+        return
+    from .microbench import run_graph_microbench
+
+    df = run_graph_microbench(prof["model"], prof["dtype"], PROC, tiny_scale=prof["tiny"])
+    print(df.round(2).to_string(index=False))
+
+
+def exp_engines(prof):
+    """dynamic-cache engine vs static-slot engine vs static-slot + CUDA graphs: open-loop (seeds) and closed-loop (reps)."""
+    ex = prof.get("engines")
+    if not ex:
+        return
+    orows, crows = [], []
+    for name, cfg in ex["configs"].items():
+        print(f"== engines: {name}", flush=True)
+        with Server(prof, name, "continuous", cfg["max_batch"], extra=_slot_args(cfg)) as srv:
+            _require_graphs(srv, cfg)
+            print("  server stats:", {k: v for k, v in srv.stats().items() if k in ("engine", "cuda_graphs", "n_graphs", "graph_error")}, flush=True)
+            orows += _sweep_seeds(prof, srv, name, ex["rates"], ex["seeds"], "eng")
+            crows += _closed_sweep(prof, srv, name, ex["levels"], ex["reps"], "engc")
+        _append(PROC / "engines_open_loop.csv", orows)
+        _append(PROC / "engines_closed_loop.csv", crows)
+
+
+def exp_chunked(prof):
+    """Chunked prefill on a workload where ~12% of prompts are ~1.3k tokens (slot engine, same graphs)."""
+    ex = prof.get("chunked")
+    if not ex:
+        return
+    p = {**prof, "workload": ex["workload"]}
+    rows = []
+    for chunk in ex["chunks"]:
+        name = f"chunk-{chunk}" if chunk else "no-chunking"
+        print(f"== chunked prefill: {name}", flush=True)
+        cfg = dict(engine="slot", graphs=True, chunk=chunk)
+        with Server(p, f"chk-{name}", "continuous", ex["max_batch"], extra=_slot_args(cfg)) as srv:
+            _require_graphs(srv, cfg)
+            for r in _sweep_seeds(p, srv, name, ex["rates"], ex["seeds"], "chk"):
+                r["chunk_size"] = chunk
+                rows.append(r)
+        _append(PROC / "chunked_open_loop.csv", rows)
+
+
+def exp_prefix(prof):
+    """Prefix caching on a shared-preamble workload."""
+    ex = prof.get("prefix")
+    if not ex:
+        return
+    p = {**prof, "workload": ex["workload"]}
+    rows = []
+    for on in (False, True):
+        name = "prefix-cache" if on else "no-prefix-cache"
+        print(f"== prefix caching: {name}", flush=True)
+        cfg = dict(engine="slot", graphs=True, prefix=on)
+        with Server(p, f"pfx-{name}", "continuous", ex["max_batch"], extra=_slot_args(cfg)) as srv:
+            _require_graphs(srv, cfg)
+            for r in _sweep_seeds(p, srv, name, ex["rates"], ex["seeds"], "pfx"):
+                r["prefix_cache"] = on
+                rows.append(r)
+        _append(PROC / "prefix_open_loop.csv", rows)
+
+
+def exp_scale(prof):
+    """Does the engine ranking hold on a bigger model? Dynamic vs slot+graphs on Qwen2.5-1.5B."""
+    ex = prof.get("scale")
+    if not ex:
+        return
+    p = {**prof, "model": ex["model"]}
+    orows, crows = [], []
+    for name, cfg in {"dynamic-16": dict(engine="dynamic"), "slot-graph-16": dict(engine="slot", graphs=True)}.items():
+        print(f"== scale ({ex['model']}): {name}", flush=True)
+        with Server(p, f"scale-{name}", "continuous", ex["max_batch"], extra=_slot_args(cfg)) as srv:
+            _require_graphs(srv, cfg)
+            orows += _sweep_seeds(p, srv, name, ex["rates"], [0], "scl")
+            crows += _closed_sweep(p, srv, name, ex["levels"], ex["reps"], "sclc")
+        _append(PROC / "scale_open_loop.csv", orows)
+        _append(PROC / "scale_closed_loop.csv", crows)
+
+
 EXPERIMENTS = {"env": exp_env, "scheduler": exp_scheduler, "concurrency": exp_concurrency,
                "microbench": exp_microbench, "precision": exp_precision, "quality": exp_quality,
                "vllm": exp_vllm, "conc_extra": exp_conc_extra, "refine": exp_refine,
-               "ablation": exp_ablation}
+               "ablation": exp_ablation, "decode_graphs": exp_decode_graphs, "engines": exp_engines,
+               "chunked": exp_chunked, "prefix": exp_prefix, "scale": exp_scale}
 
 
 def main():

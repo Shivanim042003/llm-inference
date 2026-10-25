@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llmserve"
-version = "0.2.0"
+version = "0.4.0"
 description = "A small LLM serving stack with continuous batching, built to be measured"
 requires-python = ">=3.10"
 dependencies = ["transformers>=4.46", "fastapi", "uvicorn", "httpx", "pandas", "matplotlib"]

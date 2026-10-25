@@ -67,6 +67,8 @@ class GenRequest:
     ignore_eos: bool = False
     on_token: Optional[Callable[[int, bool], None]] = None
     # filled in by the engine
+    deadline_s: Optional[float] = None      # seconds after submit; expired requests are removed from the scheduler
+    cancelled: bool = False                 # set by Engine.cancel (e.g. client disconnected)
     t_submit: float = 0.0
     t_first: Optional[float] = None
     t_done: Optional[float] = None
@@ -74,11 +76,26 @@ class GenRequest:
     finish_reason: Optional[str] = None
 
 
+class Overloaded(Exception):
+    """Raised by Engine.submit when the pending queue or the token budget is full (maps to HTTP 503)."""
+
+
+class EngineClosed(Exception):
+    """Raised by Engine.submit after shutdown started or the engine loop failed."""
+
+
 class Engine:
     def __init__(self, model, eos_ids=(), device="cpu", max_batch=8, policy="continuous",
-                 max_prefill_per_step=2, max_ctx=4096, log_steps=True, last_logits_only=True):
+                 max_prefill_per_step=2, max_ctx=4096, log_steps=True, last_logits_only=True,
+                 max_pending=256, max_queued_tokens=None):
         assert policy in ("continuous", "static")
         self.model = model
+        self.max_pending = max_pending
+        self.max_queued_tokens = max_queued_tokens      # budget over prompt+max_new tokens of all unfinished requests
+        self.accepting = True
+        self._pf = None
+        self.failed: Optional[str] = None
+        self.rejected = self.cancelled_count = self.expired_count = 0
         self.eos_ids = set(eos_ids)
         self.device = device
         self.max_batch = max_batch
@@ -102,25 +119,110 @@ class Engine:
 
     # ------------------------------------------------------------------ public API
     def submit(self, req: GenRequest):
+        """Queue a request. Raises Overloaded / EngineClosed instead of queueing without bound.
+
+        Prompts that do not fit in max_ctx together with max_new_tokens are truncated here only for direct
+        library use; the HTTP server rejects them with 400 before they reach the engine.
+        """
+        if self.failed is not None or not self.accepting:
+            raise EngineClosed(self.failed or "engine is shutting down")
         if len(req.prompt_ids) + req.max_new_tokens > self.max_ctx:
             keep = max(1, self.max_ctx - req.max_new_tokens)
             req.prompt_ids = req.prompt_ids[-keep:]
         req.t_submit = time.perf_counter()
         with self._cv:
+            if len(self.pending) >= self.max_pending:
+                self.rejected += 1
+                raise Overloaded(f"pending queue full ({self.max_pending})")
+            if self.max_queued_tokens is not None:
+                load = sum(len(r.prompt_ids) + r.max_new_tokens for r in list(self.pending) + list(self.active))
+                if load + len(req.prompt_ids) + req.max_new_tokens > self.max_queued_tokens:
+                    self.rejected += 1
+                    raise Overloaded(f"token budget exhausted ({load}/{self.max_queued_tokens})")
             self.pending.append(req)
             self._cv.notify()
+
+    def cancel(self, req: GenRequest):
+        """Thread-safe: mark a request cancelled; the engine thread removes it at the next tick."""
+        req.cancelled = True
+        with self._cv:
+            self._cv.notify()
+
+    def _finish_unscheduled(self, req: GenRequest, reason: str):
+        req.t_done, req.finish_reason = time.perf_counter(), reason
+        if req.on_token:
+            req.on_token(None, True)
+
+    def _expired(self, req: GenRequest, now: float) -> bool:
+        return req.deadline_s is not None and now - req.t_submit > req.deadline_s
+
+    def _reap_pending(self):
+        """Drop cancelled / expired requests that have not started (cheap: no KV state yet)."""
+        now = time.perf_counter()
+        with self._cv:
+            keep, dead = collections.deque(), []
+            for r in self.pending:
+                if r.cancelled:
+                    dead.append((r, "cancelled"))
+                elif self._expired(r, now):
+                    dead.append((r, "timeout"))
+                else:
+                    keep.append(r)
+            self.pending = keep
+        for r, why in dead:
+            self.cancelled_count += why == "cancelled"
+            self.expired_count += why == "timeout"
+            self._finish_unscheduled(r, why)
+
+    def _reap_active_reasons(self):
+        """[(request, reason)] for active requests that must stop now."""
+        now = time.perf_counter()
+        out = []
+        for r in self.active:
+            if r.cancelled:
+                out.append((r, "cancelled"))
+            elif self._expired(r, now):
+                out.append((r, "timeout"))
+        return out
+
+    def fail_all(self, reason: str):
+        """Terminate every unfinished request with `reason` (engine failure / shutdown) so no client hangs."""
+        with self._cv:
+            victims = list(self.pending)
+            self.pending.clear()
+        victims += [r for r in self.active if r.t_done is None]
+        pf = getattr(self, "_pf", None)
+        if pf is not None:
+            victims.append(pf["req"])
+        for r in victims:
+            if r.t_done is None:
+                self._finish_unscheduled(r, reason)
+        self.active = []
+        if hasattr(self, "slots"):
+            self.slots.clear()
+        self._pf = None
 
     def start(self):
         self._stop = False
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
-    def stop(self):
+    def stop(self, drain_s: float = 0.0):
+        """Stop accepting, let in-flight work finish for up to drain_s seconds, then fail whatever is left."""
+        self.accepting = False
+        t0 = time.perf_counter()
+        while drain_s > 0 and self._has_work() and time.perf_counter() - t0 < drain_s and self._thread \
+                and self._thread.is_alive():
+            time.sleep(0.02)
         with self._cv:
             self._stop = True
             self._cv.notify_all()
         if self._thread:
             self._thread.join(timeout=10)
+        self.fail_all("shutdown")
+
+    def alive(self) -> bool:
+        return self.failed is None and self._thread is not None and self._thread.is_alive()
 
     def run_until_idle(self):
         """Synchronous driver, used by tests."""
@@ -130,19 +232,32 @@ class Engine:
     def stats(self):
         return {"active": len(self.active), "pending": len(self.pending),
                 "completed": self.completed, "max_batch": self.max_batch, "policy": self.policy,
-                "last_logits_only": self.last_logits_only}
+                "last_logits_only": self.last_logits_only, "rejected": self.rejected,
+                "cancelled": self.cancelled_count, "expired": self.expired_count,
+                "failed": self.failed, "accepting": self.accepting}
 
     # ------------------------------------------------------------------ loop
     def _loop(self):
         while True:
             with self._cv:
-                while not self._stop and not self.pending and not self.active:
+                while not self._stop and not self._has_work():
                     self._cv.wait(timeout=0.5)
                 if self._stop:
                     return
-            self.tick()
+            try:
+                self.tick()
+            except Exception as exc:  # propagate to every waiting client instead of dying silently
+                self.failed = f"{type(exc).__name__}: {exc}"
+                self.accepting = False
+                self.fail_all("error")
+                return
+
+    def _has_work(self) -> bool:
+        return bool(self.pending or self.active)
 
     def tick(self) -> bool:
+        self._reap_pending()
+        self._reap_active()
         started_empty = not self.active
         admitted = 0
         limit = self.max_batch if self.policy == "static" else self.max_prefill_per_step
@@ -197,6 +312,35 @@ class Engine:
             self.next_ids = torch.cat([self.next_ids, tok_t], 0)
         self.active.append(req)
 
+    def _reap_active(self):
+        dead = self._reap_active_reasons()
+        if not dead or not self.active:
+            return
+        ids = {id(r): why for r, why in dead}
+        keep = [i for i, r in enumerate(self.active) if id(r) not in ids]
+        for r, why in dead:
+            self.cancelled_count += why == "cancelled"
+            self.expired_count += why == "timeout"
+            self._finish_unscheduled(r, why)
+        self._drop_rows(keep)
+
+    def _drop_rows(self, keep):
+        """Keep only batch rows `keep`: free their KV, trim leading all-padding columns."""
+        self.active = [self.active[i] for i in keep]
+        if not keep:
+            self.cache = self.mask = self.next_ids = None
+            return
+        idx = torch.tensor(keep, device=self.device)
+        kv = [(k.index_select(0, idx), v.index_select(0, idx)) for k, v in cache_to_tuples(self.cache)]
+        mask = self.mask.index_select(0, idx)
+        first = int(mask.any(0).nonzero()[0])
+        if first > 0:
+            kv = [(k[:, :, first:], v[:, :, first:]) for k, v in kv]
+            mask = mask[:, first:]
+        self.cache = tuples_to_cache(kv)
+        self.mask = mask
+        self.next_ids = self.next_ids.index_select(0, idx)
+
     @torch.no_grad()
     def _decode_step(self):
         t0 = time.perf_counter()
@@ -250,5 +394,5 @@ class Engine:
         if finished:
             req.t_done, req.finish_reason = now, reason
         if req.on_token:
-            req.on_token(tok, finished)
+            req.on_token(None if is_eos else tok, finished)   # None = terminal event with no text
         return finished

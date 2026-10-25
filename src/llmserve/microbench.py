@@ -59,10 +59,7 @@ def decode_curve(model, device, vocab, batches, ctx=256, steps=8):
     from .engine import tuples_to_cache
 
     rows = []
-    _global_warm = True  # run the whole sweep once untimed so cuBLAS/allocator init is not charged to batch 1
-    for _pass in (0, 1):
-      rows = []
-      for b in batches:
+    for b in batches:
         try:
             ids = torch.randint(3, vocab, (b, ctx), device=device)
             out = forward_last_logits(model, ids, use_cache=True)   # avoids a [B, ctx, vocab] logits tensor
@@ -145,3 +142,59 @@ def run(model_id, dtype, outdir, tiny_scale=False, peak_bw_gbs=320.0):
         prof_txt.append(f"=== decode step, batch={b}, ctx=256 ===\n{profile_decode(model, device, vocab, b)}\n")
     (out / "profile_decode.txt").write_text("\n".join(prof_txt))
     return pre, dec, meta
+
+
+@torch.no_grad()
+def decode_graph_curve(model, device, batches=(1, 2, 4, 8, 16, 32), ctx=256, iters=30, max_ctx=1024):
+    """Decode-step time of the SlotEngine kernel path: HF dynamic cache vs slot eager vs slot + CUDA graph.
+
+    All three do the same math for the same shape (every row attends to `ctx` cached tokens).
+    """
+    from .slot_engine import SlotEngine
+
+    rows = []
+    vocab = model.config.vocab_size
+    dec = decode_curve(model, device, vocab, list(batches), ctx=ctx)
+    for _, r in dec.iterrows():
+        rows.append({"batch": int(r["batch"]), "variant": "hf-dynamic-cache (eager)", "step_ms": r["step_ms"]})
+    S = max(batches)
+    for graphs in (False, True):
+        if graphs and device != "cuda":
+            continue
+        eng = SlotEngine(model, device=device, max_batch=S, max_ctx=max_ctx, cuda_graphs=graphs,
+                         ctx_buckets=[ctx + 1, max_ctx], log_steps=False)
+        if graphs and not eng.cuda_graphs:
+            rows.append({"batch": 0, "variant": f"slot + cuda graph (FAILED: {eng.graph_error})", "step_ms": float("nan")})
+            continue
+        T = eng._bucket(ctx + 1, eng.ctx_buckets)
+        for b in batches:
+            Sb = eng._bucket(b, eng.batch_buckets)
+            eng.tok_buf[:] = torch.randint(3, vocab, (S,), device=device)
+            eng.pos_buf[:] = ctx
+            if graphs:
+                g, _ = eng.graphs[(Sb, T)]
+                fn = g.replay
+            else:
+                fn = lambda: eng._decode_core(Sb, T)
+            sec = _timed(fn, device, warmup=5, iters=iters)
+            rows.append({"batch": b, "variant": "slot + cuda graph" if graphs else "slot eager (static KV)",
+                         "step_ms": sec * 1e3})
+        del eng
+        if device == "cuda":
+            torch.cuda.empty_cache()
+    out = pd.DataFrame(rows)
+    out["tok_per_s"] = out["batch"] / (out["step_ms"] / 1e3)
+    return out
+
+
+def run_graph_microbench(model_id, dtype, outdir, tiny_scale=False):
+    from pathlib import Path
+
+    out = Path(outdir)
+    out.mkdir(parents=True, exist_ok=True)
+    model, _tok, _eos, device = load_model(model_id, dtype=dtype)
+    batches = (1, 2, 4) if tiny_scale else (1, 2, 4, 8, 16, 32)
+    df = decode_graph_curve(model, device, batches, ctx=64 if tiny_scale else 256,
+                            max_ctx=256 if tiny_scale else 1024, iters=5 if tiny_scale else 30)
+    df.to_csv(out / "decode_graphs.csv", index=False)
+    return df

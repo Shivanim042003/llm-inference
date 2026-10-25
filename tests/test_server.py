@@ -19,9 +19,15 @@ def free_port():
         return s.getsockname()[1]
 
 
-@pytest.fixture(scope="module", params=["sequential", "static", "continuous"])
+@pytest.fixture(scope="module", params=["sequential", "static", "continuous", "slot", "slot-chunked-prefix"])
 def server(request):
-    app = build_app(TINY_ID, mode=request.param, max_batch=8, dtype="float32")
+    kw = {}
+    mode = request.param
+    if mode.startswith("slot"):
+        kw = dict(engine_kind="slot", max_ctx=1024, chunk_size=16 if "chunked" in mode else 0,
+                  prefix_cache="prefix" in mode)
+        mode = "continuous"
+    app = build_app(TINY_ID, mode=mode, max_batch=8, dtype="float32", **kw)
     port = free_port()
     cfg = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
     srv = uvicorn.Server(cfg)
