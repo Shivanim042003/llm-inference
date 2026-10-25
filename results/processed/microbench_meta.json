@@ -1,1 +1,1 @@
-{"model":"Qwen\/Qwen2.5-0.5B-Instruct","dtype":"float16","device":"cuda","param_bytes":988065536,"kv_bytes_per_token":12288,"gpu":"Tesla T4","gpu_mem_peak_mb":8493.4809570312}
+{"model":"Qwen\/Qwen2.5-0.5B-Instruct","dtype":"float16","device":"cuda","param_bytes":988065536,"kv_bytes_per_token":12288,"gpu":"Tesla T4","gpu_mem_peak_mb":3248.4208984375}
