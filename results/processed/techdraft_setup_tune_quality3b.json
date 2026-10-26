@@ -1,0 +1,15 @@
+{
+  "model": "Qwen/Qwen2.5-3B-Instruct",
+  "rates": [
+    0.3
+  ],
+  "split": "tune",
+  "run": "quality3b",
+  "max_items": null,
+  "e2e_slo_s": 15.0,
+  "ttft_slo_s": 2.0,
+  "k_chunks": 4,
+  "backends": [
+    "slot-graph-32"
+  ]
+}

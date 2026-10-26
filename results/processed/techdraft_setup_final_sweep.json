@@ -1,0 +1,22 @@
+{
+  "model": "Qwen/Qwen2.5-1.5B-Instruct",
+  "rates": [
+    0.25,
+    0.5,
+    0.75,
+    1,
+    1.5
+  ],
+  "split": "final",
+  "run": "sweep",
+  "max_items": 100,
+  "e2e_slo_s": 15.0,
+  "ttft_slo_s": 2.0,
+  "k_chunks": 4,
+  "backends": [
+    "dynamic-32",
+    "slot-graph-32",
+    "slot-graph-32+prefix",
+    "vllm"
+  ]
+}
