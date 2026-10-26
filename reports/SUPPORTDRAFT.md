@@ -2,7 +2,7 @@
 
 All tickets and the knowledge base are **synthetic** (a fictional product, 'PebbleBoard'). Labels used below: **MEASURED** = observed in the run; **AUTOMATED** = deterministic quality check, not human-verified; **ASSUMPTION** = an input chosen by the author; **ESTIMATE** = arithmetic on measured numbers and assumptions. No reviewer time, user behaviour or real cost saving was measured.
 
-Setup: model `Qwen/Qwen2.5-1.5B-Instruct`, split `test`, latency objective: draft complete within 15.0 s (a draft is *useful* only if it passes the automated checks AND arrives in time); time to first token objective 2.0 s is reported separately.
+Setup: model `Qwen/Qwen2.5-1.5B-Instruct`, split `test`, latency objective: draft complete within 15.0 s (a draft counts as *passing and on time* only if it passes the automated checks AND arrives in time; this is not a human judgment of usefulness); time to first token objective 2.0 s is reported separately.
 
 ## 1. Retrieval (MEASURED, backend-independent)
 
@@ -33,7 +33,7 @@ Correct rate by ticket kind for `dynamic-32`: escalate 58% (n=12), hard 33% (n=3
 
 ## 3. Serving under a ticket spike (MEASURED)
 
-| backend | offered/s | requests | failed | p95 TTFT (s) | p95 draft time (s) | on time | useful | useful drafts/s |
+| backend | offered/s | requests | failed | p95 TTFT (s) | p95 draft time (s) | on time | passing & on time | passing & on-time drafts/s |
 |---|---|---|---|---|---|---|---|---|
 | dynamic-32 | 0.50 | 57 | 0 | 0.17 | 3.55 | 100% | 44% | 0.22 |
 | dynamic-32 | 1.00 | 57 | 0 | 0.18 | 3.77 | 100% | 44% | 0.42 |
@@ -75,14 +75,14 @@ Correct rate by ticket kind for `dynamic-32`: escalate 58% (n=12), hard 33% (n=3
 
 ASSUMPTION: GPU price 0.35 USD/hour (set `results/processed/supportdraft_assumptions.json` to change it). 'Sustainable rate' = highest tested offered rate with zero failures and at least 95% of drafts on time.
 
-| backend | sustainable_rate | useful_rate_at_cap | saturated_usd_per_1k_useful | est_agents_supported | est_provisioned_usd_per_1k_useful | est_utilization |
+| backend | sustainable_rate | passing_on_time_rate_at_cap | saturated_usd_per_1k_passing | est_agents_supported | est_provisioned_usd_per_1k_passing | est_utilization |
 |---|---|---|---|---|---|---|
 | dynamic-32 | 6 (next tested 8 failed) | 44% | 0.046 | 3600.000 | 2.660 | 0.014 |
 | slot-graph-32 | 8 (next tested 12 failed) | 45% | 0.034 | 4800.000 | 2.578 | 0.010 |
 | slot-graph-32+prefix | 12 (next tested 16 failed) | 46% | 0.020 | 7200.000 | 2.530 | 0.007 |
 
-- *saturated_usd_per_1k_useful* (MEASURED duration x ASSUMED price): GPU cost while the benchmark ran, per 1,000 useful drafts; assumes the GPU is fully busy.
-- *est_agents_supported*, *est_provisioned_usd_per_1k_useful*, *est_utilization* (ESTIMATE): assume 50 agents each requesting 6 drafts per hour for 10 service hours per day. The provisioned cost includes idle GPU time in the service window, so a lightly used deployment looks much more expensive per useful draft than the saturated figure suggests. Change the assumptions to match a real team.
+- *saturated_usd_per_1k_passing* (MEASURED duration x ASSUMED price): GPU cost while the benchmark ran, per 1,000 passing, on-time drafts; assumes the GPU is fully busy.
+- *est_agents_supported*, *est_provisioned_usd_per_1k_passing*, *est_utilization* (ESTIMATE): assume 50 agents each requesting 6 drafts per hour for 10 service hours per day. The provisioned cost includes idle GPU time in the service window, so a lightly used deployment looks much more expensive per passing, on-time draft than the saturated figure suggests. Change the assumptions to match a real team.
 
 ## 5. Labor value (ESTIMATE only; no reviewer time was measured)
 
@@ -124,7 +124,8 @@ Monthly value = tickets per month x share of drafts a person accepts x minutes s
 
 ## Provenance and caveats
 
-- **Human review is not independent.** One reviewer (the author) judged 30 drafts. For most of them, Claude, the assistant that helped build this project, suggested a verdict in the same session before the reviewer answered. Treat the agreement numbers as indicative, not as an independent check.
-- **Test-split hygiene.** The prompt was tuned on the dev split only. When the first test run was stopped, one partial result from the earlier prompt (dynamic-32 at 0.5 req/s, 21% correct) had been seen. The test numbers above come from a clean rerun with the final prompt.
+- **Human review is not independent.** One reviewer (the author) judged 30 drafts. For most of them, Claude, the assistant that helped build this project, suggested a verdict in the same session before the reviewer answered. Treat the agreement numbers as indicative, not as an independent check. The review covered the LLM drafts only, so it does not show whether generation beats the retrieval baseline for a person.
+- **Test-split hygiene.** The prompt was tuned on the dev split only. When the first test run was stopped, one partial result from the earlier prompt (dynamic-32 at 0.5 req/s, 21% correct) had been seen. The test numbers above come from a clean rerun with the final prompt. Retrieval stemming was added after looking at retrieval misses that included test tickets, so the test set is not fully untouched for the whole pipeline.
 - **Template copying.** In 7 of 13 escalation drafts at the lowest rate, the model repeated the example reason from the prompt word for word, so escalation reasons are often not tailored.
+- **Not yet shown:** that generation improves the workflow over retrieval alone, or any productivity gain. 'Passing & on time' means passing the rule-based checks and arriving within the latency objective; it is not a human judgment of usefulness. vLLM has not been run on this ticket workload.
 - Differences of a few points in correctness between engines (44% to 49%) are within run-to-run and fp16 noise; one run per point.

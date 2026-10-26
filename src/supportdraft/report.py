@@ -32,10 +32,14 @@ DEFAULT_ASSUMPTIONS = dict(
     tickets_per_month_sensitivity=[2000, 10000])
 
 
+DISPLAY = {"useful": "passing & on time", "useful drafts/s": "passing & on-time drafts/s", "useful_rate_at_cap": "passing_on_time_rate_at_cap",
+           "saturated_usd_per_1k_useful": "saturated_usd_per_1k_passing", "est_provisioned_usd_per_1k_useful": "est_provisioned_usd_per_1k_passing"}
+
+
 def _md(df, digits=2):
     if df.empty:
         return "(no rows)\n"
-    cols = list(df.columns)
+    cols = [DISPLAY.get(c, c) for c in df.columns]
     fmt = lambda v: (f"{v:.{digits}f}" if isinstance(v, float) else str(v))
     lines = ["| " + " | ".join(cols) + " |", "|" + "|".join("---" for _ in cols) + "|"]
     lines += ["| " + " | ".join(fmt(v) for v in row) + " |" for row in df.itertuples(index=False)]
@@ -59,7 +63,7 @@ def summary_markdown():
             "knowledge base (30 passages, 114 synthetic tickets, held-out test split). All data are synthetic; automated checks are rule-based "
             "and not human-verified; dollar figures use an assumed GPU price of "
             f"{A['gpu_usd_per_hour']:.2f} USD/hour; no labor saving was measured.\n\n"
-            f"Model `{setup.get('model', '?')}`, split `{split_name}`, draft must complete within {setup.get('e2e_slo_s', '?')} s to count as useful.\n\n"
+            f"Model `{setup.get('model', '?')}`, split `{split_name}`, draft must complete within {setup.get('e2e_slo_s', '?')} s to count as a passing, on-time draft.\n\n"
             "Draft quality (AUTOMATED), including two no-LLM baselines:\n\n" + _md(q) +
             "\nServing capacity and cost (MEASURED duration x ASSUMED price):\n\n" + _md(SUMMARY["capacity"], 3) +
             "\nFull report with caveats: [reports/SUPPORTDRAFT.md](reports/SUPPORTDRAFT.md).\n")
@@ -90,7 +94,7 @@ def build(assumptions=None, split_name="test"):
                "**ASSUMPTION** = an input chosen by the author; **ESTIMATE** = arithmetic on measured numbers and assumptions. "
                "No reviewer time, user behaviour or real cost saving was measured.\n")
     out.append(f"Setup: model `{setup.get('model', '?')}`, split `{split_name}`, latency objective: draft complete within "
-               f"{setup.get('e2e_slo_s', '?')} s (a draft is *useful* only if it passes the automated checks AND arrives in time); "
+               f"{setup.get('e2e_slo_s', '?')} s (a draft counts as *passing and on time* only if it passes the automated checks AND arrives in time; this is not a human judgment of usefulness); "
                f"time to first token objective {setup.get('ttft_slo_s', '?')} s is reported separately.\n")
 
     # -------- retrieval
@@ -152,7 +156,7 @@ def build(assumptions=None, split_name="test"):
         ax[1].plot(g["offered_rps"], g["useful_per_s"], marker="o", label=b)
     ax[0].axhline(setup.get("e2e_slo_s", 15), color="k", ls=":", lw=1)
     ax[0].set_xlabel("offered tickets/s"); ax[0].set_ylabel("p95 draft time (s)"); ax[0].set_xscale("log"); ax[0].set_yscale("log")
-    ax[1].set_xlabel("offered tickets/s"); ax[1].set_ylabel("useful drafts/s"); ax[1].set_xscale("log")
+    ax[1].set_xlabel("offered tickets/s"); ax[1].set_ylabel("passing, on-time drafts/s"); ax[1].set_xscale("log")
     ax[0].legend(frameon=False, fontsize=8); plt.tight_layout(); plt.savefig(FIGS / "supportdraft.png", dpi=150); plt.close()
     out.append("![supportdraft](figures/supportdraft.png)\n")
 
@@ -178,11 +182,11 @@ def build(assumptions=None, split_name="test"):
     SUMMARY["quality"] = qt
     SUMMARY["capacity"] = cap_tab[[c for c in ("backend", "sustainable_rate", "useful_rate_at_cap", "saturated_usd_per_1k_useful") if c in cap_tab]]
     SUMMARY["setup"] = (setup, A, split_name)
-    out.append(f"- *saturated_usd_per_1k_useful* (MEASURED duration x ASSUMED price): GPU cost while the benchmark ran, per 1,000 useful drafts; "
+    out.append(f"- *saturated_usd_per_1k_passing* (MEASURED duration x ASSUMED price): GPU cost while the benchmark ran, per 1,000 passing, on-time drafts; "
                "assumes the GPU is fully busy.\n"
-               f"- *est_agents_supported*, *est_provisioned_usd_per_1k_useful*, *est_utilization* (ESTIMATE): assume {A['agents']} agents each "
+               f"- *est_agents_supported*, *est_provisioned_usd_per_1k_passing*, *est_utilization* (ESTIMATE): assume {A['agents']} agents each "
                f"requesting {A['drafts_per_agent_per_hour']} drafts per hour for {A['service_hours_per_day']} service hours per day. The provisioned cost "
-               "includes idle GPU time in the service window, so a lightly used deployment looks much more expensive per useful draft than the "
+               "includes idle GPU time in the service window, so a lightly used deployment looks much more expensive per passing, on-time draft than the "
                "saturated figure suggests. Change the assumptions to match a real team.\n")
 
     # -------- value estimate
