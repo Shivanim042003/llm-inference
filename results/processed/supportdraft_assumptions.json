@@ -1,0 +1,7 @@
+{
+  "gpu_usd_per_hour": 0.35,
+  "agents": 50,
+  "drafts_per_agent_per_hour": 6,
+  "service_hours_per_day": 10,
+  "agent_cost_usd_per_hour": 30
+}

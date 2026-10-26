@@ -222,3 +222,32 @@ The Colab notebook in this repo runs everything end to end and pushes results ba
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+<!-- SUPPORTDRAFT:START -->
+## Use case: SupportDraft
+
+**SupportDraft** is an application built on this serving stack: a grounded support-reply drafter over a fictional product's knowledge base (30 passages, 114 synthetic tickets, held-out test split). All data are synthetic; automated checks are rule-based and not human-verified; dollar figures use an assumed GPU price of 0.35 USD/hour; no labor saving was measured.
+
+Model `Qwen/Qwen2.5-1.5B-Instruct`, split `test`, draft must complete within 15.0 s to count as useful.
+
+Draft quality (AUTOMATED), including two no-LLM baselines:
+
+| backend | overall correct | answerable: correct | over-escalated | escalation recall | invented numbers |
+|---|---|---|---|---|---|
+| dynamic-32 | 44% | 40% | 13% | 58% | 13% |
+| slot-graph-32 | 46% | 42% | 13% | 58% | 13% |
+| slot-graph-32+prefix | 49% | 47% | 13% | 58% | 10% |
+| baseline: always escalate | 21% | 0% | 100% | 100% | n/a |
+| baseline: quote top-1 passage (no LLM) | 81% | 96% | 0% | 25% | 0% |
+
+Serving capacity and cost (MEASURED duration x ASSUMED price):
+
+| backend | sustainable_rate | useful_rate_at_cap | saturated_usd_per_1k_useful |
+|---|---|---|---|
+| dynamic-32 | 6 (next tested 8 failed) | 44% | 0.046 |
+| slot-graph-32 | 8 (next tested 12 failed) | 45% | 0.034 |
+| slot-graph-32+prefix | 12 (next tested 16 failed) | 46% | 0.020 |
+
+Full report with caveats: [reports/SUPPORTDRAFT.md](reports/SUPPORTDRAFT.md).
+
+<!-- SUPPORTDRAFT:END -->
