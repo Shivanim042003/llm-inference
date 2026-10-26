@@ -46,8 +46,11 @@ reference on CPU. On the T4, `scripts/verify_gpu_equivalence.py` compares the en
 12 prompts x 48 tokens) every slot-engine variant, including CUDA graphs and chunked prefill with the prefix cache,
 produces exactly the same greedy tokens as the reference dynamic-cache engine. In fp16 (36 prompts x 96 tokens, 0.5B and
 1.5B), CUDA graphs still reproduce the eager slot engine exactly, but the slot engine matches the reference exactly on
-86-89% of prompts (mean matching prefix 91-95%). The fp32 result indicates the fp16 gap is near-tie rounding,
-not a logic difference. This is a spot check on the tested configurations, not a proof. The server rejects unsupported options, bounds its queue
+86-89% of prompts (mean matching prefix 91-95%). `scripts/diagnose_fp16_divergence.py` teacher-forces the 8 diverging cases (of 72 prompt runs) through an fp32 copy:
+the two chosen tokens' fp32 logits differ by at most 0.022, comparable to the fp16 logit error (median max 0.014-0.015);
+4 of the 8 are exact fp16 ties; the fp32 argmax agrees with the reference engine in 5 cases and with the slot engine in 3.
+This is consistent with fp16 near-tie rounding rather than a systematic difference, but 8 cases is a small sample and
+this is a spot check on the tested configurations, not a proof. The server rejects unsupported options, bounds its queue
 (503), enforces deadlines, cancels on client disconnect, propagates engine failures and drains on shutdown, with tests
 for each. Each request's streaming buffer is finite (`max_tokens + 4` events), so memory per request is bounded; this is a
 memory bound, not slow-client detection or backpressure. A client that stops reading is ended by its request deadline
@@ -55,7 +58,7 @@ memory bound, not slow-client detection or backpressure. A client that stops rea
 
 **Limits.** One GPU class (T4) and two Qwen models; greedy decoding only; synthetic workloads (no real user traffic);
 the load generator shares the machine's 2 vCPUs with the server (its CPU use is recorded per run and the report says
-whether it was a likely bottleneck); numbers are only comparable within a run and do not establish production readiness. The prefix cache is LRU, so a cyclic access
+whether it was a likely bottleneck, as a diagnostic signal from average CPU time, not proof); numbers are only comparable within a run and do not establish production readiness. The prefix cache is LRU, so a cyclic access
 pattern over more prefixes than fit defeats it (observed in testing).
 
 ## What is in here

@@ -588,7 +588,9 @@ def build():
         worst = max(v for _, v in cpu_notes)
         findings.append(f"Load-generator CPU use (cores, of the host's {envd.get('cpu_count', '?')}): peak {worst:.2f} "
                         + ("(above 0.8: at the highest rates the client may be a bottleneck, treat saturation numbers as client-limited bounds)."
-                           if worst > 0.8 else "(below 0.8: the colocated client was not CPU-bound in these runs).")
+                           if worst > 0.8 else "(below 0.8: no sign that the colocated client was CPU-bound. This is a diagnostic signal from "
+                                               "average process CPU time, not proof: short bursts, GIL contention and scheduling delays on the 2 "
+                                               "shared vCPUs would not show up in an average.)")
                         + " Per file: " + ", ".join(f"{n} {v:.2f}" for n, v in cpu_notes) + ".")
     fnd = "### Key findings (auto-generated from the data)\n\n" + \
           ("\n".join(f"- {f}" for f in findings) if findings else "- (no results yet)") + "\n"
