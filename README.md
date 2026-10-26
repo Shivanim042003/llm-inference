@@ -46,11 +46,13 @@ reference on CPU. On the T4, `scripts/verify_gpu_equivalence.py` checks Qwen2.5-
 prompts, 48 tokens): CUDA-graph, eager-slot and dynamic-cache engines produced identical greedy tokens. This is a spot
 check, not a proof; fp16 kernels can differ on other inputs. The server rejects unsupported options, bounds its queue
 (503), enforces deadlines, cancels on client disconnect, propagates engine failures and drains on shutdown, with tests
-for each. Streaming buffers are bounded per request (`max_tokens + 4` events); a client that cannot keep up is
-cancelled rather than buffered without limit.
+for each. Each request's streaming buffer is finite (`max_tokens + 4` events), so memory per request is bounded; this is a
+memory bound, not slow-client detection or backpressure. A client that stops reading is ended by its request deadline
+(default 120 s) or a disconnect, and the engine never waits for a slow reader.
 
-**Limits.** One GPU class and two Qwen models; greedy decoding only; synthetic workloads; the load generator shares the
-machine's 2 vCPUs with the server; numbers are only comparable within a run. The prefix cache is LRU, so a cyclic access
+**Limits.** One GPU class (T4) and two Qwen models; greedy decoding only; synthetic workloads (no real user traffic);
+the load generator shares the machine's 2 vCPUs with the server (its CPU use is recorded per run and the report says
+whether it was a likely bottleneck); numbers are only comparable within a run and do not establish production readiness. The prefix cache is LRU, so a cyclic access
 pattern over more prefixes than fit defeats it (observed in testing).
 
 ## What is in here

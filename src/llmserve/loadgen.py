@@ -100,6 +100,7 @@ async def run_open_loop(url: str, model: str, rate: float, n_requests: int, work
     arrival are cancelled and counted as failed (the server is overloaded)."""
     rnd = random.Random(seed)
     limits = httpx.Limits(max_connections=4096, max_keepalive_connections=4096)
+    cpu0 = time.process_time()
     async with httpx.AsyncClient(limits=limits) as client:
         t_run0 = time.perf_counter()
         tasks: List[asyncio.Task] = []
@@ -122,7 +123,9 @@ async def run_open_loop(url: str, model: str, rate: float, n_requests: int, work
             else:
                 records.append(RequestRecord(t_arrival=0.0, ok=False, error="cancelled_overload"))
         wall = time.perf_counter() - t_run0
-    return records, summarize(records, wall, offered_rps=rate, slo_ttft=slo_ttft, slo_tpot=slo_tpot)
+    summ = summarize(records, wall, offered_rps=rate, slo_ttft=slo_ttft, slo_tpot=slo_tpot)
+    summ["client_cpu_cores"] = (time.process_time() - cpu0) / wall if wall > 0 else float("nan")  # load-generator CPU use
+    return records, summ
 
 
 async def run_closed_loop(url: str, model: str, concurrency: int, n_requests: int,
@@ -133,6 +136,7 @@ async def run_closed_loop(url: str, model: str, concurrency: int, n_requests: in
     it = iter(work)
     records: List[RequestRecord] = []
     limits = httpx.Limits(max_connections=4096, max_keepalive_connections=4096)
+    cpu0 = time.process_time()
     async with httpx.AsyncClient(limits=limits) as client:
         t_run0 = time.perf_counter()
 
@@ -142,7 +146,9 @@ async def run_closed_loop(url: str, model: str, concurrency: int, n_requests: in
 
         await asyncio.gather(*[worker() for _ in range(concurrency)])
         wall = time.perf_counter() - t_run0
-    return records, summarize(records, wall, offered_rps=None, slo_ttft=slo_ttft, slo_tpot=slo_tpot)
+    summ = summarize(records, wall, offered_rps=None, slo_ttft=slo_ttft, slo_tpot=slo_tpot)
+    summ["client_cpu_cores"] = (time.process_time() - cpu0) / wall if wall > 0 else float("nan")
+    return records, summ
 
 
 async def warmup(url: str, model: str, n: int = 4, max_tokens: int = 8):

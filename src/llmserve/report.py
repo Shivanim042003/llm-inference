@@ -579,6 +579,17 @@ def build():
               "TTFT is client-visible: time to the first non-empty content chunk. Open-loop Poisson arrivals; SLO = "
               "TTFT and TPOT thresholds shown with each table. 'Greedy agreement' in the precision table measures numerical "
               "consistency with fp32, not task quality; perplexity is on WikiText-2 only when the row says so.\n")
+    cpu_notes = []
+    for name in ("scheduler_open_loop.csv", "engines_open_loop.csv", "engines_closed_loop.csv", "concurrency_closed_loop.csv"):
+        d = _read(name)
+        if d is not None and "client_cpu_cores" in d and d["client_cpu_cores"].notna().any():
+            cpu_notes.append((name.replace(".csv", ""), float(d["client_cpu_cores"].max())))
+    if cpu_notes:
+        worst = max(v for _, v in cpu_notes)
+        findings.append(f"Load-generator CPU use (cores, of the host's {envd.get('cpu_count', '?')}): peak {worst:.2f} "
+                        + ("(above 0.8: at the highest rates the client may be a bottleneck, treat saturation numbers as client-limited bounds)."
+                           if worst > 0.8 else "(below 0.8: the colocated client was not CPU-bound in these runs).")
+                        + " Per file: " + ", ".join(f"{n} {v:.2f}" for n, v in cpu_notes) + ".")
     fnd = "### Key findings (auto-generated from the data)\n\n" + \
           ("\n".join(f"- {f}" for f in findings) if findings else "- (no results yet)") + "\n"
     body = head + method + "\n" + fnd + "\n" + "\n".join(s for s in sections if s)

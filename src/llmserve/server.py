@@ -187,7 +187,7 @@ def build_app(model_id, mode="continuous", max_batch=16, dtype="float16", quant=
             def put():
                 try:
                     queue.put_nowait(ev)
-                except asyncio.QueueFull:      # slow-client policy: stop generating for it, never buffer without bound
+                except asyncio.QueueFull:      # defensive only: unreachable for healthy requests (bound > max events)
                     engine.cancel(req)
             loop.call_soon_threadsafe(put)
 
