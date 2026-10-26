@@ -40,6 +40,7 @@ class PrefixCache:
         self.bytes = 0
         self._next = 0
         self.lookups = self.hit_requests = self.hit_tokens = self.prompt_tokens = 0
+        self.evictions = self.rejected_inserts = 0
 
     def lookup(self, ids):
         """Longest cached block-aligned prefix of `ids`, leaving at least one token to compute."""
@@ -68,6 +69,7 @@ class PrefixCache:
         keys = [tuple(ids[:j * self.block]) for j in range(1, m + 1)]
         nbytes = sum(k.numel() * k.element_size() + v.numel() * v.element_size() for k, v in kv)
         if nbytes > self.max_bytes:
+            self.rejected_inserts += 1
             return
         nid = self._next
         self._next += 1
@@ -78,6 +80,7 @@ class PrefixCache:
         while self.bytes > self.max_bytes and len(self.nodes) > 1:
             old, (okeys, _, onb) = next(iter(self.nodes.items()))
             del self.nodes[old]
+            self.evictions += 1
             self.bytes -= onb
             for key in okeys:
                 if self.index.get(key) == old:
@@ -87,7 +90,8 @@ class PrefixCache:
         return {"prefix_lookups": self.lookups, "prefix_hit_requests": self.hit_requests,
                 "prefix_hit_tokens": self.hit_tokens, "prefix_prompt_tokens": self.prompt_tokens,
                 "prefix_token_hit_rate": (self.hit_tokens / self.prompt_tokens) if self.prompt_tokens else 0.0,
-                "prefix_cache_mb": self.bytes / 2**20}
+                "prefix_cache_mb": self.bytes / 2**20, "prefix_evictions": self.evictions,
+                "prefix_rejected_inserts": self.rejected_inserts}
 
 
 def _rot_half(x):

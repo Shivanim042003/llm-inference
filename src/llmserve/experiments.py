@@ -197,6 +197,12 @@ def exp_env(prof):
         import torch, transformers
         info.update(torch=torch.__version__, transformers=transformers.__version__,
                     cuda_available=torch.cuda.is_available())
+        import importlib.metadata as md
+        for pkg in ("accelerate", "fastapi", "uvicorn", "httpx", "pandas", "numpy", "matplotlib", "bitsandbytes", "datasets"):
+            try:
+                info[f"pkg_{pkg}"] = md.version(pkg)
+            except Exception:
+                info[f"pkg_{pkg}"] = None
         if torch.cuda.is_available():
             info.update(gpu=torch.cuda.get_device_name(0), cuda=torch.version.cuda,
                         gpu_mem_gb=round(torch.cuda.get_device_properties(0).total_memory / 2**30, 1))

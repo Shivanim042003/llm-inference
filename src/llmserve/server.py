@@ -175,12 +175,21 @@ def build_app(model_id, mode="continuous", max_batch=16, dtype="float16", quant=
                             f"limit of {max_ctx}; shorten the input (the server never truncates silently)",
                        code="context_length_exceeded")
         loop = asyncio.get_running_loop()
-        queue: asyncio.Queue = asyncio.Queue()
+        # Per-request streaming buffer. A request emits at most max_tokens token events plus one terminal event, so
+        # this bound can never be hit by a healthy request; if it is, the client is cancelled instead of buffering.
+        queue: asyncio.Queue = asyncio.Queue(maxsize=p["max_tokens"] + 4)
 
         def on_token(token_id, finished):
             # Immutable event: (token id or None, finished, finish reason). The consumer never reads req.out_ids,
             # so a slow client cannot see duplicated, merged or empty content.
-            loop.call_soon_threadsafe(queue.put_nowait, (token_id, finished, req.finish_reason if finished else None))
+            ev = (token_id, finished, req.finish_reason if finished else None)
+
+            def put():
+                try:
+                    queue.put_nowait(ev)
+                except asyncio.QueueFull:      # slow-client policy: stop generating for it, never buffer without bound
+                    engine.cancel(req)
+            loop.call_soon_threadsafe(put)
 
         req = GenRequest(prompt_ids=prompt_ids, max_new_tokens=p["max_tokens"], ignore_eos=p["ignore_eos"],
                          on_token=on_token, deadline_s=p["timeout"])

@@ -40,13 +40,18 @@ Open-loop points use 2 seeds; closed-loop points use 3 repeats (mean ± sd).
   outputs (58% / 17% greedy prefix agreement); fp16 is the only useful reduced precision (1.08x, perplexity unchanged).
 - Static slots alone gave only ~15%; most of the gain comes from CUDA graphs.
 
-**Correctness and robustness.** Validated on the T4 with Qwen2.5-0.5B on a small set (12 mixed-length prompts, 48 tokens): CUDA-graph, eager-slot and dynamic-cache engines produced identical greedy tokens. This is a spot check, not a proof; fp16 kernels can differ on other inputs.
- Engine feature combinations are validated on the tested configurations (many shapes, GQA variants, slot reuse,
-chunking, prefix hits) against an uncached fp64 reference on CPU; the server rejects unsupported options, bounds its queue (503), enforces deadlines, cancels on client
-disconnect, propagates engine failures and drains on shutdown, with tests for each.
+**Correctness and robustness.** Engine feature combinations are validated on the tested configurations (many shapes,
+GQA variants, slot reuse, context-bucket crossings, chunking, prefix hits and evictions) against an uncached fp64
+reference on CPU. On the T4, `scripts/verify_gpu_equivalence.py` checks Qwen2.5-0.5B on a small set (12 mixed-length
+prompts, 48 tokens): CUDA-graph, eager-slot and dynamic-cache engines produced identical greedy tokens. This is a spot
+check, not a proof; fp16 kernels can differ on other inputs. The server rejects unsupported options, bounds its queue
+(503), enforces deadlines, cancels on client disconnect, propagates engine failures and drains on shutdown, with tests
+for each. Streaming buffers are bounded per request (`max_tokens + 4` events); a client that cannot keep up is
+cancelled rather than buffered without limit.
 
-**Limits.** One GPU class and two Qwen models; greedy decoding only; the load generator shares the machine's 2 vCPUs
-with the server; numbers are only comparable within a run.
+**Limits.** One GPU class and two Qwen models; greedy decoding only; synthetic workloads; the load generator shares the
+machine's 2 vCPUs with the server; numbers are only comparable within a run. The prefix cache is LRU, so a cyclic access
+pattern over more prefixes than fit defeats it (observed in testing).
 
 ## What is in here
 

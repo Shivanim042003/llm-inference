@@ -25,11 +25,17 @@ def serve(model, rs, **kw):
 
 def test_decode_crosses_every_context_bucket_boundary():
     model = build_tiny_model().double()
-    rs = [GenRequest(prompt_ids=[5 + i, 9, 11], max_new_tokens=120, ignore_eos=True) for i in range(3)]
-    eng = serve(model, rs, max_batch=4, max_ctx=160, ctx_buckets=[8, 16, 32, 64, 128, 160])
-    for r in rs:    # prompt 3 + 120 new tokens crosses 8, 16, 32, 64 and 128
+    buckets = [8, 16, 32, 64, 128, 160]
+    rs = [GenRequest(prompt_ids=[5 + i, 9, 11], max_new_tokens=150, ignore_eos=True) for i in range(3)]
+    eng = SlotEngine(model, device="cpu", max_batch=4, max_ctx=160, ctx_buckets=buckets)
+    used, orig = set(), eng._decode_core
+    eng._decode_core = lambda Sb, T: (used.add(T), orig(Sb, T))[1]      # record the context bucket of every step
+    for r in rs:
+        eng.submit(r)
+    eng.run_until_idle()
+    assert used == set(buckets), f"expected every bucket to be exercised, got {sorted(used)}"   # 3 + 150 tokens -> 160
+    for r in rs:
         assert r.out_ids == reference_greedy(model, r.prompt_ids, r.max_new_tokens)
-    assert eng.completed == 3
 
 
 def test_long_generation_with_many_slot_reuses():
@@ -41,19 +47,24 @@ def test_long_generation_with_many_slot_reuses():
     assert len(eng.free) == 3
 
 
-def test_outputs_stay_exact_when_prefix_cache_is_evicting():
+def test_outputs_stay_exact_across_prefix_hits_and_real_evictions():
     model = build_tiny_model().double()
     rnd = random.Random(5)
     prefixes = [[rnd.randrange(3, 500) for _ in range(24)] for _ in range(6)]
-    rs = [GenRequest(prompt_ids=prefixes[i % 6] + [rnd.randrange(3, 500) for _ in range(rnd.randint(2, 6))],
-                     max_new_tokens=5, ignore_eos=True) for i in range(24)]
-    eng = serve(model, rs, max_batch=2, max_ctx=128, ctx_buckets=[64, 128], prefix_cache=True, prefix_block=8,
-                prefix_cache_mb=0)           # budget ~0 MB: every insert is rejected or evicted immediately
-    eng2 = serve(model, [GenRequest(prompt_ids=list(r.prompt_ids), max_new_tokens=5, ignore_eos=True) for r in rs],
-                 max_batch=2, max_ctx=128, ctx_buckets=[64, 128], prefix_cache=True, prefix_block=8, prefix_cache_mb=1)
+    rs = [GenRequest(prompt_ids=prefixes[(i // 3) % 6] + [rnd.randrange(3, 500) for _ in range(rnd.randint(2, 6))],
+                     max_new_tokens=5, ignore_eos=True) for i in range(36)]
+    eng = SlotEngine(model, device="cpu", max_batch=2, max_ctx=128, ctx_buckets=[64, 128],
+                     prefix_cache=True, prefix_block=8)
+    eng.pcache.max_bytes = 70_000        # one node is ~30 KB here: room for ~2 of the 6 prefixes; groups of 3 requests share one -> hits and evictions
     for r in rs:
+        eng.submit(r)
+    eng.run_until_idle()
+    st = eng.pcache.stats()
+    assert st["prefix_evictions"] > 0, "the byte budget never forced an eviction"
+    assert st["prefix_hit_requests"] > 0, "no request ever hit the cache"
+    assert eng.pcache.bytes <= eng.pcache.max_bytes
+    for r in rs:                          # every request, whether it hit, missed or followed an eviction
         assert r.out_ids == reference_greedy(model, r.prompt_ids, r.max_new_tokens)
-    assert eng2.pcache.hit_requests > 0 and eng.pcache.hit_requests == 0
 
 
 def test_cancel_and_expire_during_chunked_prefill_free_everything():
