@@ -42,9 +42,12 @@ Open-loop points use 2 seeds; closed-loop points use 3 repeats (mean ± sd).
 
 **Correctness and robustness.** Engine feature combinations are validated on the tested configurations (many shapes,
 GQA variants, slot reuse, context-bucket crossings, chunking, prefix hits and evictions) against an uncached fp64
-reference on CPU. On the T4, `scripts/verify_gpu_equivalence.py` checks Qwen2.5-0.5B on a small set (12 mixed-length
-prompts, 48 tokens): CUDA-graph, eager-slot and dynamic-cache engines produced identical greedy tokens. This is a spot
-check, not a proof; fp16 kernels can differ on other inputs. The server rejects unsupported options, bounds its queue
+reference on CPU. On the T4, `scripts/verify_gpu_equivalence.py` compares the engines on mixed-length prompts on the T4. In fp32 (Qwen2.5-0.5B,
+12 prompts x 48 tokens) every slot-engine variant, including CUDA graphs and chunked prefill with the prefix cache,
+produces exactly the same greedy tokens as the reference dynamic-cache engine. In fp16 (36 prompts x 96 tokens, 0.5B and
+1.5B), CUDA graphs still reproduce the eager slot engine exactly, but the slot engine matches the reference exactly on
+86-89% of prompts (mean matching prefix 91-95%). The fp32 result indicates the fp16 gap is near-tie rounding,
+not a logic difference. This is a spot check on the tested configurations, not a proof. The server rejects unsupported options, bounds its queue
 (503), enforces deadlines, cancels on client disconnect, propagates engine failures and drains on shutdown, with tests
 for each. Each request's streaming buffer is finite (`max_tokens + 4` events), so memory per request is bounded; this is a
 memory bound, not slow-client detection or backpressure. A client that stops reading is ended by its request deadline

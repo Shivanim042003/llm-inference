@@ -21,6 +21,8 @@ from llmserve.slot_engine import SlotEngine
 ap = argparse.ArgumentParser()
 ap.add_argument("--models", nargs="+", default=None)
 ap.add_argument("--quick", action="store_true")
+ap.add_argument("--dtype", default=None, choices=["float16", "float32", "bfloat16"],
+                help="default float16 on GPU. float32 is the strict mode: engines must then agree almost exactly")
 a = ap.parse_args()
 CUDA = torch.cuda.is_available()
 models = a.models or (["Qwen/Qwen2.5-0.5B-Instruct"] if a.quick else ["Qwen/Qwen2.5-0.5B-Instruct", "Qwen/Qwen2.5-1.5B-Instruct"])
@@ -64,7 +66,7 @@ def agree(x, y):
 
 failures = []
 for model_id in models:
-    model, tok, eos, dev = load_model(model_id, dtype="float16" if CUDA else "float32")
+    model, tok, eos, dev = load_model(model_id, dtype=a.dtype or ("float16" if CUDA else "float32"))
     prompts = build_prompts(tok)
     lens = [len(p) for p in prompts]
     print(f"\n=== {model_id}: {len(prompts)} prompts, {min(lens)}-{max(lens)} prompt tokens, {NEW} new tokens each ===")
@@ -81,7 +83,7 @@ for model_id in models:
         ex, mp, worst = agree(out, dyn)
         print(f"  {name:36s} vs dynamic cache: exact {100*ex:3.0f}%  mean matching prefix {100*mp:3.0f}%  worst prompt {100*worst:3.0f}%"
               + (f"  (prefix hit rate {100*hit:.0f}%)" if hit is not None else ""))
-        if mp < 0.85:
+        if mp < (0.99 if a.dtype == "float32" else 0.85):
             failures.append(f"{model_id} / {name}: diverges from the dynamic-cache engine (mean matching prefix {100*mp:.0f}%)")
     ex, mp, worst = agree(runs["slot + graphs"], runs["slot eager"])
     print(f"  {'slot + graphs vs slot eager':36s}: exact {100*ex:3.0f}%  mean matching prefix {100*mp:3.0f}%  worst prompt {100*worst:3.0f}%")
