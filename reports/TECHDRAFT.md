@@ -7,7 +7,7 @@ Data: the public TechQA questions (real IBM developer-forum posts) and the IBM t
 - 910 questions (300 unanswerable) and 496 documents (2457 chunks of about 180 words). Split by hash of the question id: `tune` (347 questions, used for prompt and threshold choices) and `final` (560, evaluated after freezing).
 - This is **our own split of a merged copy**, not the official train/dev split. The knowledge base is built from the documents of *all* questions, so each question's correct document is always in the index, and unanswerable questions have only other questions' documents to match. That makes retrieval easier than a real deployment and makes abstention a test of whether the retrieved text answers the question.
 - 'Pass' for an answerable question means: the model answered, every quoted sentence appears verbatim in the excerpt it cites, and the answer's token F1 against the gold answer is at least 0.2. For an unanswerable question it means the model abstained. This is an overlap check, **not** a measure of whether a customer would find the reply useful.
-- 3 question(s) were excluded because the prompt would not fit the 4,096-token server limit with 300 generated tokens; they are not truncated or scored.
+- 3 question(s) were excluded because the prompt would not fit the 4,096-token server limit with 300 generated tokens; they are not truncated or scored. Excluded ids: `tune` ['TRAIN_Q063'], `final` ['TRAIN_Q090', 'DEV_Q010']. Every model and baseline below is computed on exactly the remaining ids; hashes of those id sets, the prompt and the parser are in `results/processed/techdraft_manifest.json`.
 - Unanswerable here means 'the provided documents do not contain the answer', not 'a human must act'.
 
 ## 1. Retrieval (MEASURED, backend-independent)
@@ -76,4 +76,5 @@ Sustainable rate = highest tested offered rate with zero failures and at least 9
 - One model, one GPU, greedy decoding, Poisson arrivals; the evaluation set is a few hundred questions, so a few points of difference are noise.
 - The split is ours, on a merged copy; the final set was evaluated after freezing the pipeline, but any later tuning against it would remove that property.
 - Overlap with a gold answer rewards copying; the top-chunk baselines show how much of the score a no-LLM system gets.
+- The pass rule checks that quoted sentences appear in the excerpts and that the answer overlaps the gold answer; it does not check that every statement in the answer follows from the quotes.
 - No human judged these replies. Prompts are long (retrieved technote excerpts), so serving results differ from short-prompt workloads.

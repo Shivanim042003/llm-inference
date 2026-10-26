@@ -1,0 +1,39 @@
+{
+  "dataset": "nvidia/TechQA-RAG-Eval",
+  "n_records": 910,
+  "split_rule": "sha1(id) mod 1000 < 400 -> tune, else final",
+  "chunk_words": 180,
+  "chunk_overlap": 30,
+  "k_chunks": 4,
+  "exclusion_rule": "prompt tokens (Qwen chat template) > 3796 (server limit 4096 minus 300 generated tokens)",
+  "tokenizer": "Qwen/Qwen2.5-1.5B-Instruct",
+  "f1_pass_threshold": 0.2,
+  "system_prompt_sha256_16": "1644c973d648ec84",
+  "pipeline_py_sha256_16": "ddea5cb198bb01c1",
+  "splits": {
+    "tune": {
+      "n": 347,
+      "n_unanswerable": 122,
+      "ids_sha256_16": "91e98ae26305f4ce",
+      "excluded_ids": [
+        "TRAIN_Q063"
+      ],
+      "excluded_sha256_16": "56ba72e320f2ea7f"
+    },
+    "final": {
+      "n": 560,
+      "n_unanswerable": 178,
+      "ids_sha256_16": "ad18774478cf3bff",
+      "excluded_ids": [
+        "DEV_Q010",
+        "TRAIN_Q090"
+      ],
+      "excluded_sha256_16": "29bed3746df1dbf4"
+    }
+  },
+  "models": [
+    "Qwen/Qwen2.5-1.5B-Instruct",
+    "Qwen/Qwen2.5-3B-Instruct"
+  ],
+  "note": "All models and baselines in the report are computed on exactly the evaluated ids of each split."
+}

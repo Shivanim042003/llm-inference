@@ -10,6 +10,7 @@ from supportdraft.cost import sustainable_rate
 from supportdraft.report import _md
 
 from .data import KB, load, split_of
+from . import manifest as _manifest
 from . import run as _run
 from .run import prepare_items
 from .score import F1_PASS, score_baselines, tune_threshold
@@ -40,9 +41,12 @@ def build(data_path=None, final="final", tune="tune", k=4):
     records = load(data_path)
     kb = KB(records)
     it_tune = prepare_items([r for r in records if split_of(r["id"]) == tune], kb, k)
-    n_ex_tune = len(_run.EXCLUDED)
+    ex_tune = list(_run.EXCLUDED)
     it_final = prepare_items([r for r in records if split_of(r["id"]) == final], kb, k)
-    n_ex = n_ex_tune + len(_run.EXCLUDED)
+    ex_final = list(_run.EXCLUDED)
+    n_ex = len(ex_tune) + len(ex_final)
+    man = _manifest.build(records, {tune: it_tune, final: it_final}, {tune: ex_tune, final: ex_final}, k)
+    _manifest.write(man, PROC / "techdraft_manifest.json")
     thr = tune_threshold(it_tune, kb, k)
     base_final = score_baselines(it_final, kb, thr, k)
     base_tune = score_baselines(it_tune, kb, thr, k)
@@ -64,7 +68,7 @@ def build(data_path=None, final="final", tune="tune", k=4):
         "real deployment and makes abstention a test of whether the retrieved text answers the question.\n"
         f"- 'Pass' for an answerable question means: the model answered, every quoted sentence appears verbatim in the excerpt it cites, and the answer's token F1 against the gold answer is "
         f"at least {F1_PASS}. For an unanswerable question it means the model abstained. This is an overlap check, **not** a measure of whether a customer would find the reply useful.\n"
-        f"- {n_ex} question(s) were excluded because the prompt would not fit the 4,096-token server limit with 300 generated tokens; they are not truncated or scored.\n"
+        f"- {n_ex} question(s) were excluded because the prompt would not fit the 4,096-token server limit with 300 generated tokens; they are not truncated or scored. Excluded ids: `{tune}` {ex_tune}, `{final}` {ex_final}. Every model and baseline below is computed on exactly the remaining ids; hashes of those id sets, the prompt and the parser are in `results/processed/techdraft_manifest.json`.\n"
         "- Unanswerable here means 'the provided documents do not contain the answer', not 'a human must act'.\n")
     out.append("## 1. Retrieval (MEASURED, backend-independent)\n")
     out.append(_md(pd.DataFrame([dict(split=tune, questions=len(it_tune), unanswerable=n_imp(it_tune), **{f"gold document in top-{k}": _pct(hit(it_tune))}),
@@ -117,6 +121,7 @@ def build(data_path=None, final="final", tune="tune", k=4):
         "- One model, one GPU, greedy decoding, Poisson arrivals; the evaluation set is a few hundred questions, so a few points of difference are noise.\n"
         "- The split is ours, on a merged copy; the final set was evaluated after freezing the pipeline, but any later tuning against it would remove that property.\n"
         "- Overlap with a gold answer rewards copying; the top-chunk baselines show how much of the score a no-LLM system gets.\n"
+        "- The pass rule checks that quoted sentences appear in the excerpts and that the answer overlaps the gold answer; it does not check that every statement in the answer follows from the quotes.\n"
         "- No human judged these replies. Prompts are long (retrieved technote excerpts), so serving results differ from short-prompt workloads.\n")
     md = "\n".join(out)
     (REPORTS / "TECHDRAFT.md").write_text(md, encoding="utf-8")
