@@ -109,9 +109,22 @@ Monthly value = tickets per month x share of drafts a person accepts x minutes s
 | 10000 | 90% | 3 | 13500 | 77 | 13423 |
 | 10000 | 90% | 5 | 22500 | 77 | 22423 |
 
+## 6. Human review (PILOT-MEASURED, small sample)
+
+| sheet | n_reviewed | approve_rate | accept_or_edit_rate | reject_rate | automated_vs_human_agreement | auto_pass_but_human_reject | auto_fail_but_human_accept | mean_review_seconds |
+|---|---|---|---|---|---|---|---|---|
+| review_slot-graph-32.csv | 30 | 0.233 | 0.533 | 0.467 | 0.733 | 3 | 5 | 21.290 |
+
 ## Limits
 
 - Synthetic knowledge base and tickets written by the author; real tickets are messier. The test split was not used to tune prompts, but retrieval stemming was added after looking at retrieval misses that included test tickets.
 - Automated checks are rule-based; they can pass a poor draft and fail an acceptable one.
 - One model, one GPU, greedy decoding, Poisson arrivals; the ticket set is small (see `n` above).
 - Cost depends on an assumed GPU price; labor value depends on assumptions that were not measured.
+
+## Provenance and caveats
+
+- **Human review is not independent.** One reviewer (the author) judged 30 drafts. For most of them, Claude, the assistant that helped build this project, suggested a verdict in the same session before the reviewer answered. Treat the agreement numbers as indicative, not as an independent check.
+- **Test-split hygiene.** The prompt was tuned on the dev split only. When the first test run was stopped, one partial result from the earlier prompt (dynamic-32 at 0.5 req/s, 21% correct) had been seen. The test numbers above come from a clean rerun with the final prompt.
+- **Template copying.** In 7 of 13 escalation drafts at the lowest rate, the model repeated the example reason from the prompt word for word, so escalation reasons are often not tailored.
+- Differences of a few points in correctness between engines (44% to 49%) are within run-to-run and fp16 noise; one run per point.

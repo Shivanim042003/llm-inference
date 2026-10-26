@@ -250,4 +250,11 @@ Serving capacity and cost (MEASURED duration x ASSUMED price):
 
 Full report with caveats: [reports/SUPPORTDRAFT.md](reports/SUPPORTDRAFT.md).
 
+## Provenance and caveats
+
+- **Human review is not independent.** One reviewer (the author) judged 30 drafts. For most of them, Claude, the assistant that helped build this project, suggested a verdict in the same session before the reviewer answered. Treat the agreement numbers as indicative, not as an independent check.
+- **Test-split hygiene.** The prompt was tuned on the dev split only. When the first test run was stopped, one partial result from the earlier prompt (dynamic-32 at 0.5 req/s, 21% correct) had been seen. The test numbers above come from a clean rerun with the final prompt.
+- **Template copying.** In 7 of 13 escalation drafts at the lowest rate, the model repeated the example reason from the prompt word for word, so escalation reasons are often not tailored.
+- Differences of a few points in correctness between engines (44% to 49%) are within run-to-run and fp16 noise; one run per point.
+
 <!-- SUPPORTDRAFT:END -->

@@ -5,3 +5,6 @@ __pycache__/
 .venv/
 .env
 results/logs/
+
+__pycache__/
+*.py[cod]
