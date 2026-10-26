@@ -143,3 +143,7 @@ Monthly value = tickets per month x share of drafts a person accepts x minutes s
 - **Template copying.** In 7 of 13 escalation drafts at the lowest rate, the model repeated the example reason from the prompt word for word, so escalation reasons are often not tailored.
 - **Not yet shown:** that generation improves the workflow over retrieval alone, or any productivity gain. 'Passing & on time' means passing the rule-based checks and arriving within the latency objective; it is not a human judgment of usefulness. vLLM was run on this same ticket set and the same rates with the same prompts (separate environment, GPU memory fraction 0.5); its rows appear in the tables above. It is a different server stack, so differences include scheduler, kernels and memory settings, not one feature.
 - Differences of a few points in correctness between engines (44% to 49%) are within run-to-run and fp16 noise; one run per point.
+
+## Benchmark configuration history
+
+Two vLLM runs were made; the second is authoritative (the first used the model's default sampling settings, so its quality was not comparable). See [SUPPORTDRAFT_VLLM_RUNS.md](SUPPORTDRAFT_VLLM_RUNS.md) for both configurations and the evidence.
