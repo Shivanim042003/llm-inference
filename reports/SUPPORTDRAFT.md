@@ -20,14 +20,16 @@ Share of answerable tickets whose correct passage is among the top-k retrieved. 
 | dynamic-32 | 44% | 40% | 63% | 72% | 13% | 0% | 18% | 13% | 58% |
 | slot-graph-32 | 46% | 42% | 64% | 74% | 13% | 0% | 18% | 13% | 58% |
 | slot-graph-32+prefix | 49% | 47% | 67% | 77% | 10% | 0% | 17% | 13% | 58% |
+| vllm | 35% | 29% | 59% | 47% | 29% | 0% | 3% | 16% | 58% |
 | baseline: always escalate | 21% | 0% | 0% | n/a | n/a | n/a | n/a | 100% | 100% |
 | baseline: quote top-1 passage (no LLM) | 81% | 96% | 96% | 96% | 0% | 0% | 96% | 0% | 25% |
 
-Measured at each backend's lowest offered rate. Greedy decoding makes quality nearly independent of load; the spread of the overall correct rate across offered rates was dynamic-32: 44%-45%, slot-graph-32: 44%-47%, slot-graph-32+prefix: 45%-49%. The two baseline rows use no language model and are scored by the same checks: quoting the top retrieved passage already satisfies the rules on most answerable tickets, so the checks cannot separate a tailored reply from a copy-paste ('copied from passage' shows how much of each draft is verbatim source text). A language model adds value mainly through escalation recall and through answering the actual question, which these checks only partly capture. These are rule-based checks: they verify required facts, cited-source support, invented numbers, known-wrong values and escalation. They do not judge tone, completeness or subtle errors; use the human review sheet for that.
+Measured at each backend's lowest offered rate. Greedy decoding makes quality nearly independent of load; the spread of the overall correct rate across offered rates was dynamic-32: 44%-45%, slot-graph-32: 44%-47%, slot-graph-32+prefix: 45%-49%, vllm: 33%-35%. The two baseline rows use no language model and are scored by the same checks: quoting the top retrieved passage already satisfies the rules on most answerable tickets, so the checks cannot separate a tailored reply from a copy-paste ('copied from passage' shows how much of each draft is verbatim source text). A language model adds value mainly through escalation recall and through answering the actual question, which these checks only partly capture. These are rule-based checks: they verify required facts, cited-source support, invented numbers, known-wrong values and escalation. They do not judge tone, completeness or subtle errors; use the human review sheet for that.
 
 - `dynamic-32` outcomes: ok 25, missing_fact 14, bad_citation 7, over_escalated 6, missed_escalation 5
 - `slot-graph-32` outcomes: ok 26, missing_fact 13, bad_citation 7, over_escalated 6, missed_escalation 5
 - `slot-graph-32+prefix` outcomes: ok 28, missing_fact 12, bad_citation 6, over_escalated 6, missed_escalation 5
+- `vllm` outcomes: ok 20, missing_fact 15, bad_citation 10, over_escalated 7, missed_escalation 5
 
 Correct rate by ticket kind for `dynamic-32`: escalate 58% (n=12), hard 33% (n=30), terse 53% (n=15)
 
@@ -68,6 +70,17 @@ Correct rate by ticket kind for `dynamic-32`: escalate 58% (n=12), hard 33% (n=3
 | slot-graph-32+prefix | 12.00 | 399 | 0 | 2.25 | 6.16 | 100% | 46% | 4.92 |
 | slot-graph-32+prefix | 16.00 | 513 | 0 | 12.56 | 15.14 | 94% | 44% | 4.91 |
 | slot-graph-32+prefix | 24.00 | 741 | 0 | 32.51 | 34.83 | 32% | 15% | 1.74 |
+| vllm | 0.50 | 57 | 0 | 0.17 | 1.18 | 100% | 35% | 0.18 |
+| vllm | 1.00 | 57 | 0 | 0.06 | 1.10 | 100% | 33% | 0.33 |
+| vllm | 1.50 | 57 | 0 | 0.06 | 1.12 | 100% | 33% | 0.50 |
+| vllm | 2.00 | 114 | 0 | 0.06 | 1.12 | 100% | 33% | 0.70 |
+| vllm | 3.00 | 114 | 0 | 0.07 | 1.18 | 100% | 34% | 1.07 |
+| vllm | 4.00 | 171 | 0 | 0.07 | 1.17 | 100% | 33% | 1.36 |
+| vllm | 6.00 | 228 | 0 | 0.07 | 1.28 | 100% | 35% | 1.94 |
+| vllm | 8.00 | 285 | 0 | 0.08 | 1.32 | 100% | 34% | 2.53 |
+| vllm | 12.00 | 399 | 0 | 0.18 | 1.66 | 100% | 35% | 4.09 |
+| vllm | 16.00 | 513 | 0 | 2.49 | 3.68 | 100% | 35% | 5.36 |
+| vllm | 24.00 | 741 | 0 | 15.35 | 16.14 | 88% | 31% | 4.88 |
 
 ![supportdraft](figures/supportdraft.png)
 
@@ -80,6 +93,7 @@ ASSUMPTION: GPU price 0.35 USD/hour (set `results/processed/supportdraft_assumpt
 | dynamic-32 | 6 (next tested 8 failed) | 44% | 0.046 | 3600.000 | 2.660 | 0.014 |
 | slot-graph-32 | 8 (next tested 12 failed) | 45% | 0.034 | 4800.000 | 2.578 | 0.010 |
 | slot-graph-32+prefix | 12 (next tested 16 failed) | 46% | 0.020 | 7200.000 | 2.530 | 0.007 |
+| vllm | 16 (next tested 24 failed) | 35% | 0.018 | 9600.000 | 3.307 | 0.005 |
 
 - *saturated_usd_per_1k_passing* (MEASURED duration x ASSUMED price): GPU cost while the benchmark ran, per 1,000 passing, on-time drafts; assumes the GPU is fully busy.
 - *est_agents_supported*, *est_provisioned_usd_per_1k_passing*, *est_utilization* (ESTIMATE): assume 50 agents each requesting 6 drafts per hour for 10 service hours per day. The provisioned cost includes idle GPU time in the service window, so a lightly used deployment looks much more expensive per passing, on-time draft than the saturated figure suggests. Change the assumptions to match a real team.
@@ -127,5 +141,5 @@ Monthly value = tickets per month x share of drafts a person accepts x minutes s
 - **Human review is not independent.** One reviewer (the author) judged 30 drafts. For most of them, Claude, the assistant that helped build this project, suggested a verdict in the same session before the reviewer answered. Treat the agreement numbers as indicative, not as an independent check. The review covered the LLM drafts only, so it does not show whether generation beats the retrieval baseline for a person.
 - **Test-split hygiene.** The prompt was tuned on the dev split only. When the first test run was stopped, one partial result from the earlier prompt (dynamic-32 at 0.5 req/s, 21% correct) had been seen. The test numbers above come from a clean rerun with the final prompt. Retrieval stemming was added after looking at retrieval misses that included test tickets, so the test set is not fully untouched for the whole pipeline.
 - **Template copying.** In 7 of 13 escalation drafts at the lowest rate, the model repeated the example reason from the prompt word for word, so escalation reasons are often not tailored.
-- **Not yet shown:** that generation improves the workflow over retrieval alone, or any productivity gain. 'Passing & on time' means passing the rule-based checks and arriving within the latency objective; it is not a human judgment of usefulness. vLLM has not been run on this ticket workload.
+- **Not yet shown:** that generation improves the workflow over retrieval alone, or any productivity gain. 'Passing & on time' means passing the rule-based checks and arriving within the latency objective; it is not a human judgment of usefulness. vLLM was run on this same ticket set and the same rates with the same prompts (separate environment, GPU memory fraction 0.5); its rows appear in the tables above. It is a different server stack, so differences include scheduler, kernels and memory settings, not one feature.
 - Differences of a few points in correctness between engines (44% to 49%) are within run-to-run and fp16 noise; one run per point.

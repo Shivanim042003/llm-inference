@@ -237,6 +237,7 @@ Draft quality (AUTOMATED), including two no-LLM baselines:
 | dynamic-32 | 44% | 40% | 13% | 58% | 13% |
 | slot-graph-32 | 46% | 42% | 13% | 58% | 13% |
 | slot-graph-32+prefix | 49% | 47% | 13% | 58% | 10% |
+| vllm | 35% | 29% | 16% | 58% | 29% |
 | baseline: always escalate | 21% | 0% | 100% | 100% | n/a |
 | baseline: quote top-1 passage (no LLM) | 81% | 96% | 0% | 25% | 0% |
 
@@ -247,6 +248,7 @@ Serving capacity and cost (MEASURED duration x ASSUMED price):
 | dynamic-32 | 6 (next tested 8 failed) | 44% | 0.046 |
 | slot-graph-32 | 8 (next tested 12 failed) | 45% | 0.034 |
 | slot-graph-32+prefix | 12 (next tested 16 failed) | 46% | 0.020 |
+| vllm | 16 (next tested 24 failed) | 35% | 0.018 |
 
 Full report with caveats: [reports/SUPPORTDRAFT.md](reports/SUPPORTDRAFT.md).
 
@@ -255,7 +257,7 @@ Full report with caveats: [reports/SUPPORTDRAFT.md](reports/SUPPORTDRAFT.md).
 - **Human review is not independent.** One reviewer (the author) judged 30 drafts. For most of them, Claude, the assistant that helped build this project, suggested a verdict in the same session before the reviewer answered. Treat the agreement numbers as indicative, not as an independent check. The review covered the LLM drafts only, so it does not show whether generation beats the retrieval baseline for a person.
 - **Test-split hygiene.** The prompt was tuned on the dev split only. When the first test run was stopped, one partial result from the earlier prompt (dynamic-32 at 0.5 req/s, 21% correct) had been seen. The test numbers above come from a clean rerun with the final prompt. Retrieval stemming was added after looking at retrieval misses that included test tickets, so the test set is not fully untouched for the whole pipeline.
 - **Template copying.** In 7 of 13 escalation drafts at the lowest rate, the model repeated the example reason from the prompt word for word, so escalation reasons are often not tailored.
-- **Not yet shown:** that generation improves the workflow over retrieval alone, or any productivity gain. 'Passing & on time' means passing the rule-based checks and arriving within the latency objective; it is not a human judgment of usefulness. vLLM has not been run on this ticket workload.
+- **Not yet shown:** that generation improves the workflow over retrieval alone, or any productivity gain. 'Passing & on time' means passing the rule-based checks and arriving within the latency objective; it is not a human judgment of usefulness. vLLM was run on this same ticket set and the same rates with the same prompts (separate environment, GPU memory fraction 0.5); its rows appear in the tables above. It is a different server stack, so differences include scheduler, kernels and memory settings, not one feature.
 - Differences of a few points in correctness between engines (44% to 49%) are within run-to-run and fp16 noise; one run per point.
 
 <!-- SUPPORTDRAFT:END -->
