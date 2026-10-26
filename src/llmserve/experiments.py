@@ -308,7 +308,7 @@ def _vllm_up(prof):
     base = f"http://127.0.0.1:{cfg['port']}"
     cmd = [str(py), "-m", "vllm.entrypoints.openai.api_server", "--model", prof["model"],
            "--dtype", "half", "--max-model-len", "4096", "--max-num-seqs", str(cfg["max_num_seqs"]),
-           "--gpu-memory-utilization", "0.45", "--port", str(cfg["port"])]
+           "--gpu-memory-utilization", str(cfg.get("gpu_util", 0.45)), "--port", str(cfg["port"])]
     LOGS.mkdir(parents=True, exist_ok=True)
     for backend in ["", "TRITON_ATTN", "XFORMERS"]:
         log = LOGS / f"vllm-{backend or 'default'}.log"

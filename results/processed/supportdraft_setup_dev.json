@@ -1,0 +1,12 @@
+{
+  "model": "Qwen/Qwen2.5-1.5B-Instruct",
+  "rates": [
+    1
+  ],
+  "split": "dev",
+  "e2e_slo_s": 15.0,
+  "ttft_slo_s": 2.0,
+  "backends": [
+    "slot-graph-32"
+  ]
+}
