@@ -1,12 +1,11 @@
 {
   "model": "Qwen/Qwen2.5-1.5B-Instruct",
   "rates": [
-    0.5,
-    1,
-    1.5,
-    2,
-    3,
-    4
+    6,
+    8,
+    12,
+    16,
+    24
   ],
   "split": "test",
   "e2e_slo_s": 15.0,
